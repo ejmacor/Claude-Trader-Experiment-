@@ -1,0 +1,73 @@
+name: Morning Trading Run
+
+on:
+  schedule:
+    # GitHub cron is UTC. 12:10 UTC = 8:10am ET during EDT (summer).
+    # Actions cron can lag 5-15 min at busy times, so we schedule early
+    # to make sure we're done well before the 9:30 ET open.
+    # NOTE: When clocks change to EST in November, update to '10 13 * * 1-5'.
+    - cron: '10 12 * * 1-5'
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write   # needed to commit logs back to the repo
+
+concurrency:
+  group: morning-run
+  cancel-in-progress: false
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Skip if US market holiday
+        id: holiday
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, requests, datetime, sys
+          headers = {
+              "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+              "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
+          }
+          today = datetime.date.today().isoformat()
+          r = requests.get(
+              "https://paper-api.alpaca.markets/v2/calendar",
+              headers=headers, params={"start": today, "end": today}, timeout=30)
+          r.raise_for_status()
+          is_open = bool(r.json())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"market_open={'true' if is_open else 'false'}\n")
+          print("Market open today:", is_open)
+          EOF
+
+      - name: Run morning pipeline
+        if: steps.holiday.outputs.market_open == 'true'
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run_morning.py
+
+      - name: Commit logs back to repo
+        if: steps.holiday.outputs.market_open == 'true'
+        run: |
+          git config user.name "claude-trader-bot"
+          git config user.email "actions@github.com"
+          git add logs/ || true
+          git diff --cached --quiet || git commit -m "logs: morning run $(date -u +%F)"
+          git push
