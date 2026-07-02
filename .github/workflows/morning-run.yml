@@ -71,3 +71,55 @@ jobs:
           git add logs/ || true
           git diff --cached --quiet || git commit -m "logs: morning run $(date -u +%F)"
           git push
+
+      - name: Push notification to phone
+        if: always() && steps.holiday.outputs.market_open == 'true'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import json, os, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              print("No NTFY_TOPIC secret set; skipping notification.")
+              raise SystemExit(0)
+
+          today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+          msg, title = "Run finished but no decision was logged (check Actions).", "Claude Trader"
+          try:
+              last = None
+              with open("logs/decisions.jsonl") as f:
+                  for line in f:
+                      try:
+                          row = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      d = datetime.fromisoformat(row["timestamp"]).astimezone(
+                          ZoneInfo("America/New_York")).date().isoformat()
+                      if d == today:
+                          last = row
+              if last:
+                  dec = last.get("decision", {})
+                  trades = dec.get("trades", [])
+                  if trades:
+                      title = f"Claude Trader: {len(trades)} trade(s) today"
+                      lines = [f"{t['symbol']} conviction {t.get('conviction','?')}/10 ({t.get('catalyst_type','')})"
+                               for t in trades]
+                      msg = "\n".join(lines) + "\n\n" + dec.get("market_note", "")[:300]
+                  else:
+                      title = "Claude Trader: no trades today"
+                      msg = dec.get("market_note", "No qualifying setups.")[:400]
+          except FileNotFoundError:
+              pass
+
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=msg.encode("utf-8"),
+              headers={"Title": title, "Tags": "chart_with_upwards_trend"},
+          )
+          urllib.request.urlopen(req, timeout=30)
+          print("Notification sent.")
+          EOF

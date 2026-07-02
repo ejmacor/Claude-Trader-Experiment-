@@ -7,18 +7,71 @@ on:
     - cron: '10 21 * * 1-5'
   workflow_dispatch: {}
 
+permissions:
+  contents: write   # commits outcomes back to the repo
+
+concurrency:
+  group: evening-review
+  cancel-in-progress: false
+
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
+
+      - name: Record outcomes (trades taken + rejected counterfactuals)
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: python outcomes.py | tee outcome_summary.txt
+
       - name: Run review
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: python review.py
+        run: python review.py | tee review_summary.txt
+
+      - name: Commit outcomes back to repo
+        run: |
+          git config user.name "claude-trader-bot"
+          git config user.email "actions@github.com"
+          git add logs/ || true
+          git diff --cached --quiet || git commit -m "logs: outcomes $(date -u +%F)"
+          git push
+
+      - name: Push evening notification to phone
+        if: always()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, urllib.request
+
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              print("No NTFY_TOPIC secret set; skipping notification.")
+              raise SystemExit(0)
+
+          parts = []
+          for fname in ("outcome_summary.txt", "review_summary.txt"):
+              try:
+                  with open(fname) as f:
+                      parts.append(f.read().strip())
+              except FileNotFoundError:
+                  pass
+          msg = ("\n\n".join(parts))[:900] or "Evening review ran; no summary produced."
+
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=msg.encode("utf-8"),
+              headers={"Title": "Claude Trader: evening review", "Tags": "moon"},
+          )
+          urllib.request.urlopen(req, timeout=30)
+          print("Notification sent.")
+          EOF
