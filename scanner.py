@@ -30,18 +30,6 @@ def get_most_active_and_movers():
     return resp.json().get("gainers", [])
 
 
-def get_snapshot(symbols):
-    """Batch snapshot: latest quote/trade + daily + prev daily bars."""
-    url = f"{DATA_URL}/v2/stocks/snapshots"
-    resp = requests.get(
-        url, headers=HEADERS,
-        params={"symbols": ",".join(symbols), "feed": "iex"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
 def get_news(symbol, hours_back=18):
     """Recent news headlines + summaries for a symbol."""
     start = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).isoformat()
@@ -83,7 +71,13 @@ def build_candidates():
     candidates = []
     for m in filtered:
         sym = m["symbol"]
-        news = get_news(sym)
+        try:
+            news = get_news(sym)
+        except Exception as e:  # noqa: BLE001
+            # One flaky news call shouldn't kill the whole morning.
+            # Skip this ticker (fail-safe: fewer candidates, never bad data).
+            print(f"      WARN: news lookup failed for {sym}, skipping ({e})")
+            continue
         if not news:
             # No news = no catalyst = not our strategy. Skip.
             continue

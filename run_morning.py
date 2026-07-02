@@ -2,10 +2,14 @@
 run_morning.py — The daily entry point. Run this at 8:30am ET each
 trading day (manually or via scheduler).
 
-Pipeline: scan -> Claude analyzes -> guardrails -> bracket orders -> log.
+Pipeline: guards -> scan -> Claude analyzes -> bracket orders -> log.
 """
 
 import sys
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
+
+import requests
 
 import analyst
 import executor
@@ -13,12 +17,37 @@ import scanner
 import trade_logger
 
 
+def already_ran_today():
+    """Duplicate-run guard: True if ANY order was already placed today (ET).
+
+    Protects against double-trading if the workflow runs twice in one
+    morning (scheduled run + manual trigger, or a re-run)."""
+    et_midnight = datetime.combine(
+        datetime.now(ZoneInfo("America/New_York")).date(), time.min,
+        tzinfo=ZoneInfo("America/New_York"),
+    ).astimezone(timezone.utc)
+    resp = requests.get(
+        f"{executor.BASE_URL}/v2/orders",
+        headers=executor.HEADERS,
+        params={"status": "all", "after": et_midnight.isoformat(), "limit": 100},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return len(resp.json()) > 0
+
+
 def main():
     print("=" * 60)
     print("CLAUDE TRADER — morning run")
     print("=" * 60)
 
-    # 0. Guardrails first — if halted, we don't even scan.
+    # 0a. Duplicate-run guard — never trade twice in one day.
+    if already_ran_today():
+        print("Orders already exist for today — duplicate run detected.")
+        print("Exiting without trading. (This is the safety guard working.)")
+        sys.exit(0)
+
+    # 0b. Risk guardrails — if halted, we don't even scan.
     account = executor.get_account()
     ok, reason = executor.guardrails_pass(account)
     trade_logger.log_equity(account)
