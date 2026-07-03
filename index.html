@@ -252,7 +252,7 @@ footer .sep{color:var(--line-strong)}
 
     <!-- brain map -->
     <section class="panel" style="margin-top:18px">
-      <div class="panel-h"><h2>Brain map</h2><span class="hint">patterns · tickers · catalysts — from the journal's links · drag nodes</span></div>
+      <div class="panel-h"><h2>Brain map</h2><span class="hint">scroll to zoom · drag background to pan · click a node to enter its cluster · double-click to reset</span></div>
       <div id="brainWrap">
         <canvas id="brain" aria-label="Knowledge graph of patterns, tickers and catalysts from the journal"></canvas>
         <div class="legend">
@@ -581,7 +581,15 @@ function renderBrain(notes){
   const dpr = window.devicePixelRatio||1;
   const W = wrap.clientWidth, H = wrap.clientHeight;
   canvas.width = W*dpr; canvas.height = H*dpr;
-  const ctx = canvas.getContext("2d"); ctx.scale(dpr,dpr);
+  const ctx = canvas.getContext("2d");
+
+  /* neighbor index for focus mode */
+  const nbr = new Map(nodes.map(n=>[n.id,new Set([n.id])]));
+  for(const l of links){ nbr.get(l.source.id||l.source).add(l.target.id||l.target); nbr.get(l.target.id||l.target).add(l.source.id||l.source); }
+
+  let view = {x:0, y:0, k:1};          // camera
+  let focus = null;                     // focused node id set
+  const radius = n => nodeMeta(n.id).r + Math.sqrt(n.deg)*1.6;
 
   const sim = d3.forceSimulation(nodes)
     .force("link", d3.forceLink(links).id(d=>d.id).distance(70).strength(.5))
@@ -590,40 +598,91 @@ function renderBrain(notes){
     .force("collide", d3.forceCollide().radius(d=>10+Math.sqrt(d.deg)*3));
 
   function draw(){
+    ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,W,H);
-    ctx.strokeStyle = "rgba(139,147,161,.22)"; ctx.lineWidth = 1;
+    ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+    const inFocus = id => !focus || focus.has(id);
+
+    ctx.lineWidth = 1/view.k;
     for(const l of links){
+      const on = inFocus(l.source.id) && inFocus(l.target.id);
+      ctx.strokeStyle = on ? "rgba(139,147,161,.28)" : "rgba(139,147,161,.05)";
       ctx.beginPath(); ctx.moveTo(l.source.x,l.source.y); ctx.lineTo(l.target.x,l.target.y); ctx.stroke();
     }
     for(const n of nodes){
-      const m = nodeMeta(n.id);
-      const r = m.r + Math.sqrt(n.deg)*1.6;
+      const m = nodeMeta(n.id), r = radius(n), on = inFocus(n.id);
       ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
-      ctx.fillStyle = m.c; ctx.globalAlpha = n.note ? .95 : .85; ctx.fill(); ctx.globalAlpha = 1;
-      if(n.deg>=3 || m.t==="pattern"){
-        ctx.font = "10px 'IBM Plex Mono',monospace"; ctx.fillStyle = "#8B93A1";
+      ctx.fillStyle = m.c; ctx.globalAlpha = on ? .95 : .10; ctx.fill();
+      if(on && (focus || n.deg>=3 || m.t==="pattern")){
+        ctx.font = `${10/Math.sqrt(view.k)}px 'IBM Plex Mono',monospace`;
+        ctx.fillStyle = "#A6ADBB"; ctx.globalAlpha = .95;
         ctx.fillText(n.id.replace(/^(pattern|ticker|catalyst)-/,""), n.x+r+4, n.y+3);
       }
+      ctx.globalAlpha = 1;
     }
   }
   sim.on("tick", draw);
 
-  let drag = null;
+  /* ---- camera helpers ---- */
+  const toWorld = (sx,sy) => [(sx-view.x)/view.k, (sy-view.y)/view.k];
+  let anim = null;
+  function glideTo(target, ms=450){
+    cancelAnimationFrame(anim);
+    const from = {...view}, t0 = performance.now();
+    const ease = t => 1-Math.pow(1-t,3);
+    (function step(now){
+      const t = Math.min(1,(now-t0)/ms), e = ease(t);
+      view = {x:from.x+(target.x-from.x)*e, y:from.y+(target.y-from.y)*e, k:from.k+(target.k-from.k)*e};
+      draw();
+      if(t<1) anim = requestAnimationFrame(step);
+    })(t0);
+  }
+  function focusOn(node){
+    focus = nbr.get(node.id);
+    const pts = nodes.filter(n=>focus.has(n.id));
+    const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
+    const cx=(Math.min(...xs)+Math.max(...xs))/2, cy=(Math.min(...ys)+Math.max(...ys))/2;
+    const span = Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys), 120);
+    const k = Math.min(2.8, Math.max(.4, Math.min(W,H)/(span*1.5)));
+    glideTo({k, x:W/2-cx*k, y:H/2-cy*k});
+  }
+  function reset(){ focus=null; glideTo({x:0,y:0,k:1}); }
+
+  /* ---- interaction ---- */
   const pos = e => { const b = canvas.getBoundingClientRect(); return [e.clientX-b.left, e.clientY-b.top]; };
-  const find = (x,y) => nodes.find(n => (n.x-x)**2 + (n.y-y)**2 < (12+Math.sqrt(n.deg)*2)**2);
+  const find = (sx,sy) => { const [x,y]=toWorld(sx,sy); return nodes.find(n=>(n.x-x)**2+(n.y-y)**2 < Math.max(radius(n)+4/view.k, 8/view.k)**2); };
+
+  let drag=null, panning=null, moved=false;
   canvas.addEventListener("pointerdown", e=>{
-    const [x,y] = pos(e); drag = find(x,y);
-    if(drag){ sim.alphaTarget(.25).restart(); drag.fx=x; drag.fy=y; canvas.setPointerCapture(e.pointerId); }
+    const [sx,sy]=pos(e); moved=false;
+    const n = find(sx,sy);
+    if(n){ drag=n; sim.alphaTarget(.25).restart(); const [wx,wy]=toWorld(sx,sy); n.fx=wx; n.fy=wy; }
+    else panning={sx,sy,vx:view.x,vy:view.y};
+    canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", e=>{
-    const [x,y] = pos(e);
-    if(drag){ drag.fx=x; drag.fy=y; return; }
-    const n = find(x,y);
-    if(n){ tip.textContent = `${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}`;
-           tip.style.left = (x+14)+"px"; tip.style.top = (y-8)+"px"; tip.style.opacity = 1; }
-    else tip.style.opacity = 0;
+    const [sx,sy]=pos(e);
+    if(drag){ moved=true; const [wx,wy]=toWorld(sx,sy); drag.fx=wx; drag.fy=wy; return; }
+    if(panning){ moved=true; view.x=panning.vx+(sx-panning.sx); view.y=panning.vy+(sy-panning.sy); draw(); return; }
+    const n = find(sx,sy);
+    if(n){ tip.textContent=`${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}`;
+           tip.style.left=(sx+14)+"px"; tip.style.top=(sy-8)+"px"; tip.style.opacity=1;
+           canvas.style.cursor="pointer"; }
+    else { tip.style.opacity=0; canvas.style.cursor=panning?"grabbing":"grab"; }
   });
-  canvas.addEventListener("pointerup", ()=>{ if(drag){ drag.fx=null; drag.fy=null; drag=null; sim.alphaTarget(0);} });
+  canvas.addEventListener("pointerup", e=>{
+    if(drag){ const n=drag; drag=null; n.fx=null; n.fy=null; sim.alphaTarget(0);
+      if(!moved) focusOn(n);            // click (no drag) = zoom into its cluster
+    } else if(panning){ panning=null; if(!moved && focus) { focus=null; draw(); } }
+  });
+  canvas.addEventListener("dblclick", e=>{ e.preventDefault(); reset(); });
+  canvas.addEventListener("wheel", e=>{
+    e.preventDefault();
+    const [sx,sy]=pos(e), [wx,wy]=toWorld(sx,sy);
+    const k = Math.min(4, Math.max(.3, view.k * (e.deltaY<0 ? 1.15 : 1/1.15)));
+    view = {k, x:sx-wx*k, y:sy-wy*k};
+    draw();
+  }, {passive:false});
 }
 
 /* ---------- analyst journal (Obsidian -> /journal -> here) ---------- */
