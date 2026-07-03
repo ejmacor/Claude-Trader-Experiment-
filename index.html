@@ -11,6 +11,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <style>
 :root{
   --bg:#0B0D10;
@@ -144,6 +145,16 @@ tbody tr.row{cursor:pointer}
 .jbody strong{color:var(--text)}
 .jbody hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
+/* ---------- brain map ---------- */
+#brainWrap{position:relative;height:420px;background:radial-gradient(ellipse at 50% 40%,#10141B 0%,var(--bg) 75%)}
+#brain{width:100%;height:100%;display:block;cursor:grab}
+#brain:active{cursor:grabbing}
+.legend{position:absolute;top:12px;left:14px;font-family:var(--mono);font-size:10.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px;pointer-events:none}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend i{width:8px;height:8px;border-radius:50%;display:inline-block}
+#brainTip{position:absolute;pointer-events:none;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:4px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;color:var(--text);opacity:0;transition:opacity .12s;white-space:nowrap;z-index:5}
+.brain-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:0 40px}
+
 footer{padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer .sep{color:var(--line-strong)}
 
@@ -237,6 +248,24 @@ footer .sep{color:var(--line-strong)}
     <section class="panel">
       <div class="panel-h"><h2>Decision wire</h2><span class="hint">one verdict per trading day · newest first</span></div>
       <div id="feed"></div>
+    </section>
+
+    <!-- brain map -->
+    <section class="panel" style="margin-top:18px">
+      <div class="panel-h"><h2>Brain map</h2><span class="hint">patterns · tickers · catalysts — from the journal's links · drag nodes</span></div>
+      <div id="brainWrap">
+        <canvas id="brain" aria-label="Knowledge graph of patterns, tickers and catalysts from the journal"></canvas>
+        <div class="legend">
+          <span><i style="background:#E8B04B"></i>pattern</span>
+          <span><i style="background:#8B93A1"></i>ticker</span>
+          <span><i style="background:#6BA6E8"></i>catalyst</span>
+          <span><i style="background:#E5484D"></i>miss</span>
+          <span><i style="background:#2FBF71"></i>call</span>
+          <span><i style="background:#E8EAED"></i>review</span>
+        </div>
+        <div id="brainTip"></div>
+        <div class="brain-empty" id="brainEmpty" style="display:none">The map draws itself as weekly reviews accumulate links — patterns grow heavier each time a behavior recurs.</div>
+      </div>
     </section>
 
     <!-- analyst journal (Obsidian) -->
@@ -515,6 +544,88 @@ function toggleWhy(row){
   row.querySelector(".caret").textContent = open ? "▾" : "▸";
 }
 
+/* ---------- brain map: wikilinks -> force graph ---------- */
+function nodeMeta(id){
+  if(id.startsWith("pattern-")) return {c:"#E8B04B", t:"pattern", r:6};
+  if(id.startsWith("ticker-"))  return {c:"#8B93A1", t:"ticker",  r:4.5};
+  if(id.startsWith("catalyst-"))return {c:"#6BA6E8", t:"catalyst",r:5};
+  if(id.startsWith("miss-"))    return {c:"#E5484D", t:"miss",    r:5};
+  if(id.startsWith("call-"))    return {c:"#2FBF71", t:"call",    r:5};
+  return {c:"#E8EAED", t:"review", r:5};
+}
+function buildBrain(notes){
+  const nodes = new Map(), links = [];
+  for(const n of notes){
+    const noteId = n.name;
+    if(!nodes.has(noteId)) nodes.set(noteId, {id:noteId, deg:0, note:true});
+    const seen = new Set();
+    for(const m of n.md.matchAll(/\[\[([^\[\]|]+?)(?:\|[^\[\]]*)?\]\]/g)){
+      const target = m[1].trim();
+      if(!target || seen.has(target)) continue;
+      seen.add(target);
+      if(!nodes.has(target)) nodes.set(target, {id:target, deg:0, note:false});
+      links.push({source:noteId, target});
+      nodes.get(noteId).deg++; nodes.get(target).deg++;
+    }
+  }
+  return {nodes:[...nodes.values()], links};
+}
+function renderBrain(notes){
+  const wrap = document.getElementById("brainWrap");
+  const canvas = document.getElementById("brain");
+  const tip = document.getElementById("brainTip");
+  const {nodes, links} = buildBrain(notes||[]);
+  if(!links.length){ document.getElementById("brainEmpty").style.display="flex"; return; }
+  document.getElementById("brainEmpty").style.display="none";
+
+  const dpr = window.devicePixelRatio||1;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  const ctx = canvas.getContext("2d"); ctx.scale(dpr,dpr);
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d=>d.id).distance(70).strength(.5))
+    .force("charge", d3.forceManyBody().strength(-160))
+    .force("center", d3.forceCenter(W/2, H/2))
+    .force("collide", d3.forceCollide().radius(d=>10+Math.sqrt(d.deg)*3));
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    ctx.strokeStyle = "rgba(139,147,161,.22)"; ctx.lineWidth = 1;
+    for(const l of links){
+      ctx.beginPath(); ctx.moveTo(l.source.x,l.source.y); ctx.lineTo(l.target.x,l.target.y); ctx.stroke();
+    }
+    for(const n of nodes){
+      const m = nodeMeta(n.id);
+      const r = m.r + Math.sqrt(n.deg)*1.6;
+      ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+      ctx.fillStyle = m.c; ctx.globalAlpha = n.note ? .95 : .85; ctx.fill(); ctx.globalAlpha = 1;
+      if(n.deg>=3 || m.t==="pattern"){
+        ctx.font = "10px 'IBM Plex Mono',monospace"; ctx.fillStyle = "#8B93A1";
+        ctx.fillText(n.id.replace(/^(pattern|ticker|catalyst)-/,""), n.x+r+4, n.y+3);
+      }
+    }
+  }
+  sim.on("tick", draw);
+
+  let drag = null;
+  const pos = e => { const b = canvas.getBoundingClientRect(); return [e.clientX-b.left, e.clientY-b.top]; };
+  const find = (x,y) => nodes.find(n => (n.x-x)**2 + (n.y-y)**2 < (12+Math.sqrt(n.deg)*2)**2);
+  canvas.addEventListener("pointerdown", e=>{
+    const [x,y] = pos(e); drag = find(x,y);
+    if(drag){ sim.alphaTarget(.25).restart(); drag.fx=x; drag.fy=y; canvas.setPointerCapture(e.pointerId); }
+  });
+  canvas.addEventListener("pointermove", e=>{
+    const [x,y] = pos(e);
+    if(drag){ drag.fx=x; drag.fy=y; return; }
+    const n = find(x,y);
+    if(n){ tip.textContent = `${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}`;
+           tip.style.left = (x+14)+"px"; tip.style.top = (y-8)+"px"; tip.style.opacity = 1; }
+    else tip.style.opacity = 0;
+  });
+  canvas.addEventListener("pointerup", ()=>{ if(drag){ drag.fx=null; drag.fy=null; drag=null; sim.alphaTarget(0);} });
+}
+
 /* ---------- analyst journal (Obsidian -> /journal -> here) ---------- */
 const REPO = "ejmacor/Claude-Trader-Experiment-";
 async function loadJournal(){
@@ -531,8 +642,9 @@ async function loadJournal(){
     $("journal").innerHTML = notes.map(n=>`
       <article class="jnote">
         <div class="jnote-h">${n.name}</div>
-        <div class="jbody">${marked.parse(n.md)}</div>
+        <div class="jbody">${marked.parse(n.md.replace(/\[\[([^\[\]|]+?)(?:\|([^\[\]]*))?\]\]/g, (_,a,b)=>`<em>${b||a}</em>`))}</div>
       </article>`).join("");
+    renderBrain(notes);
   }catch(e){ /* journal stays in empty state */ }
 }
 
