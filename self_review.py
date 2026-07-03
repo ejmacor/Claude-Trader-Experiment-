@@ -130,7 +130,22 @@ Requirements:
 - NEVER suggest changing the frozen rules mid-experiment.
 - Length: 250-450 words. Plain, direct, no hype. Start with a one-line
   verdict on the week. Use markdown headers sparingly (## max).
-- Do not use tables. Do not include a title line; the journal adds one."""
+- Do not use tables. Do not include a title line; the journal adds one.
+
+KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
+- Every ticker discussed: [[ticker-XXXX]] (e.g. [[ticker-CLRO]])
+- Every catalyst type touched: [[catalyst-earnings]], [[catalyst-fda]],
+  [[catalyst-ma]], [[catalyst-contract]], [[catalyst-none]], etc.
+- Every recurring behavior you identify, good or bad, as a pattern node
+  with a short kebab-case name, e.g. [[pattern-already-run-gaps]],
+  [[pattern-holiday-tape-junk]], [[pattern-overweighting-headline-size]].
+  REUSE existing pattern names from prior reviews when the same behavior
+  recurs — repetition is what makes the graph meaningful. Invent a new
+  pattern node only for a genuinely new behavior.
+- Significant single events: [[miss-YYYY-MM-DD-TICKER]] for a costly
+  wrong call, [[call-YYYY-MM-DD-TICKER]] for a notably right one.
+- End with a "Threads" line listing the 3-6 most important links from
+  this review."""
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     resp = client.messages.create(
