@@ -145,31 +145,16 @@ tbody tr.row{cursor:pointer}
 .jbody strong{color:var(--text)}
 .jbody hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
-/* ---------- brain map (HUD) ---------- */
-#brainWrap{position:relative;height:520px;background:radial-gradient(ellipse at 50% 42%,#0F1522 0%,#0B0F16 45%,var(--bg) 80%);overflow:hidden}
+/* ---------- brain map (constellation) ---------- */
+#brainWrap{position:relative;height:560px;background:radial-gradient(ellipse at 50% 45%,#0D1117 0%,#090B0F 60%,#07090C 100%);overflow:hidden}
 #brain3d{width:100%;height:100%}
 #brain3d canvas{outline:none}
-/* holographic pulse behind the graph */
-#brainWrap::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 45%, rgba(232,176,75,.07) 0%, rgba(107,166,232,.05) 30%, transparent 62%);animation:hpulse 6s ease-in-out infinite;pointer-events:none;z-index:1}
-@keyframes hpulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
-/* scanlines */
-#brainWrap::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg, rgba(232,234,237,.014) 0 1px, transparent 1px 4px);pointer-events:none;z-index:2}
-/* corner brackets */
-.hud-c{position:absolute;width:22px;height:22px;border:1px solid rgba(232,176,75,.55);z-index:4;pointer-events:none}
-.hud-c.tl{top:10px;left:10px;border-right:none;border-bottom:none}
-.hud-c.tr{top:10px;right:10px;border-left:none;border-bottom:none}
-.hud-c.bl{bottom:10px;left:10px;border-right:none;border-top:none}
-.hud-c.br{bottom:10px;right:10px;border-left:none;border-top:none}
-/* sweep line */
-.hud-sweep{position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(232,176,75,.35),transparent);animation:sweep 7s linear infinite;pointer-events:none;z-index:2}
-@keyframes sweep{0%{top:0}100%{top:100%}}
-/* HUD readout */
-.hud-stats{position:absolute;top:12px;right:14px;text-align:right;font-family:var(--mono);font-size:10.5px;color:var(--muted);z-index:4;pointer-events:none;letter-spacing:.08em}
-.hud-stats .big{color:var(--amber);font-size:12px;font-weight:600}
+.hud-stats{position:absolute;top:12px;right:14px;text-align:right;font-family:var(--mono);font-size:10.5px;color:var(--faint);z-index:4;pointer-events:none;letter-spacing:.08em}
+.hud-stats .big{color:var(--muted);font-size:11.5px;font-weight:600}
 .hud-stats div{line-height:1.7}
-.legend{position:absolute;bottom:12px;left:14px;top:auto;font-family:var(--mono);font-size:10.5px;color:var(--muted);display:flex;flex-direction:row;gap:12px;pointer-events:none;z-index:4}
+.legend{position:absolute;bottom:12px;left:14px;font-family:var(--mono);font-size:10.5px;color:var(--faint);display:flex;flex-direction:row;gap:12px;pointer-events:none;z-index:4}
 .legend span{display:flex;align-items:center;gap:6px}
-.legend i{width:7px;height:7px;border-radius:50%;display:inline-block;box-shadow:0 0 6px currentColor}
+.legend i{width:6px;height:6px;border-radius:50%;display:inline-block}
 .brain-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:0 40px;z-index:3}
 
 footer{padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
@@ -272,8 +257,6 @@ footer .sep{color:var(--line-strong)}
       <div class="panel-h"><h2>Brain map</h2><span class="hint">drag to orbit · scroll to zoom · click a node to fly to it · double-click to reset</span></div>
       <div id="brainWrap">
         <div id="brain3d" aria-label="3D knowledge graph of patterns, tickers and catalysts from the journal"></div>
-        <div class="hud-c tl"></div><div class="hud-c tr"></div><div class="hud-c bl"></div><div class="hud-c br"></div>
-        <div class="hud-sweep"></div>
         <div class="hud-stats" id="hudStats"></div>
         <div class="legend">
           <span><i style="background:#E8B04B"></i>pattern</span>
@@ -572,11 +555,11 @@ function toggleWhy(row){
 
 /* ---------- brain map: wikilinks -> force graph ---------- */
 function nodeMeta(id){
-  if(id.startsWith("pattern-")) return {c:"#E8B04B", t:"pattern", r:6};
-  if(id.startsWith("ticker-"))  return {c:"#8B93A1", t:"ticker",  r:4.5};
-  if(id.startsWith("catalyst-"))return {c:"#6BA6E8", t:"catalyst",r:5};
-  if(id.startsWith("miss-"))    return {c:"#E5484D", t:"miss",    r:5};
-  if(id.startsWith("call-"))    return {c:"#2FBF71", t:"call",    r:5};
+  if(id.startsWith("pattern-")) return {c:"#F5D76E", t:"pattern", r:6};
+  if(id.startsWith("ticker-"))  return {c:"#8FA3E8", t:"ticker",  r:4.5};
+  if(id.startsWith("catalyst-"))return {c:"#5AC8E8", t:"catalyst",r:5};
+  if(id.startsWith("miss-"))    return {c:"#E87FA0", t:"miss",    r:5};
+  if(id.startsWith("call-"))    return {c:"#7EDFA8", t:"call",    r:5};
   return {c:"#E8EAED", t:"review", r:5};
 }
 function buildBrain(notes){
@@ -612,17 +595,14 @@ function renderBrain(notes){
     .showNavInfo(false)
     .graphData({nodes, links})
     .nodeColor(n=>nodeMeta(n.id).c)
-    .nodeVal(n=>1.2+n.deg*1.4)
-    .nodeOpacity(.95)
-    .nodeResolution(24)
-    .nodeLabel(n=>`<div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:rgba(22,26,33,.92);border:1px solid rgba(232,176,75,.4);border-radius:4px;padding:5px 9px;color:#E8EAED;letter-spacing:.03em">${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}</div>`)
-    .linkColor(l=>nodeMeta((l.target.id||l.target)).c)
-    .linkOpacity(.16)
+    .nodeRelSize(2.6)
+    .nodeVal(n=>0.7+Math.sqrt(n.deg)*0.9)
+    .nodeOpacity(1)
+    .nodeResolution(16)
+    .nodeLabel(n=>`<div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:rgba(13,17,23,.94);border:1px solid rgba(90,200,232,.35);border-radius:4px;padding:5px 9px;color:#E8EAED;letter-spacing:.03em">${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}</div>`)
+    .linkColor(()=> "#3E7A8C")
+    .linkOpacity(.42)
     .linkWidth(0)
-    .linkDirectionalParticles(2)
-    .linkDirectionalParticleSpeed(.006)
-    .linkDirectionalParticleWidth(1.4)
-    .linkDirectionalParticleColor(l=>nodeMeta((l.target.id||l.target)).c)
     .onNodeClick(n=>{
       // fly the camera to the node
       const d = 55;
