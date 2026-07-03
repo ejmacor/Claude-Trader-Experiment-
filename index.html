@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Trader — Experiment Ledger</title>
+<meta name="description" content="Autonomous LLM paper-trading experiment: every decision, the reasoning behind it, and what it earned.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,700;125,800&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+:root{
+  --bg:#0B0D10;
+  --panel:#12151A;
+  --panel-2:#161A21;
+  --line:#1E232B;
+  --line-strong:#2A313C;
+  --text:#E8EAED;
+  --muted:#8B93A1;
+  --faint:#5A6270;
+  --amber:#E8B04B;
+  --amber-dim:rgba(232,176,75,.14);
+  --green:#2FBF71;
+  --green-dim:rgba(47,191,113,.12);
+  --red:#E5484D;
+  --red-dim:rgba(229,72,77,.12);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ui:"Inter",system-ui,-apple-system,sans-serif;
+  --display:"Archivo",var(--ui);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scrollbar-color:var(--line-strong) var(--bg)}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--amber);text-decoration:none}
+a:hover{text-decoration:underline}
+button{font-family:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px}
+
+.wrap{max-width:1240px;margin:0 auto;padding:0 20px}
+
+/* ---------- header ---------- */
+header{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:20}
+.hbar{display:flex;align-items:center;gap:18px;height:58px}
+.wordmark{font-family:var(--display);font-weight:800;font-stretch:125%;letter-spacing:.06em;font-size:15px;white-space:nowrap}
+.wordmark em{font-style:normal;color:var(--amber)}
+.hmeta{display:flex;align-items:center;gap:18px;margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.hmeta .sep{color:var(--faint)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
+.dot.paused{background:var(--faint)}
+#refreshBtn{font-family:var(--mono);font-size:11.5px;color:var(--muted);border:1px solid var(--line-strong);padding:4px 10px;border-radius:4px}
+#refreshBtn:hover{color:var(--text);border-color:var(--muted)}
+
+/* day clock */
+.dayclock{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.dayclock .track{width:110px;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+.dayclock .fill{height:100%;background:var(--amber);width:0%}
+
+/* ---------- verdict tape (signature) ---------- */
+.tape{border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--panel) 0%,var(--bg) 100%)}
+.tape-inner{padding:16px 0 18px}
+.tape-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--amber);text-transform:uppercase;margin-bottom:8px}
+.tape-note{font-family:var(--display);font-weight:700;font-stretch:125%;font-size:clamp(16px,2.4vw,22px);line-height:1.35;max-width:70ch}
+.tape-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{font-family:var(--mono);font-size:12px;padding:5px 10px;border:1px solid var(--line-strong);border-radius:4px;display:inline-flex;gap:8px;align-items:center;background:var(--panel)}
+.chip .g{color:var(--muted)}
+.chip.traded{border-color:rgba(47,191,113,.45);background:var(--green-dim)}
+.chip.traded .mark{color:var(--green)}
+.chip.rejected .mark{color:var(--red)}
+.chip .mark{font-weight:600}
+
+/* ---------- KPI ledger ---------- */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:22px 0;background:var(--panel)}
+.kpi{padding:14px 16px;border-right:1px solid var(--line)}
+.kpi:last-child{border-right:none}
+.kpi .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.kpi .v{font-family:var(--mono);font-size:22px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
+.kpi .s{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px}
+.pos{color:var(--green)}.neg{color:var(--red)}.flat{color:var(--text)}
+
+/* ---------- panels ---------- */
+.grid{display:grid;grid-template-columns:1fr;gap:18px;margin-bottom:18px}
+.grid.two{grid-template-columns:1.6fr 1fr}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.panel-h{display:flex;align-items:baseline;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.panel-h h2{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--text)}
+.panel-h .hint{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:auto}
+.panel-b{padding:18px}
+
+.chart-wrap{position:relative;height:300px}
+
+.empty{padding:28px 18px;text-align:center;color:var(--muted);font-size:13px}
+.empty b{color:var(--text);font-weight:600;display:block;margin-bottom:4px;font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+
+/* stat rows (right column) */
+.statrow{display:flex;justify-content:space-between;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12.5px}
+.statrow:last-child{border-bottom:none}
+.statrow .lbl{color:var(--muted)}
+.statrow .val{font-variant-numeric:tabular-nums;font-weight:600}
+.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:5px}
+.bar>span{display:block;height:100%;background:var(--amber)}
+
+/* ---------- trades ledger ---------- */
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+thead th{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-strong)}
+tbody td{padding:11px 14px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;vertical-align:top}
+tbody tr.row:hover{background:var(--panel-2)}
+tbody tr.row{cursor:pointer}
+.tk{font-weight:600;color:var(--text)}
+.why{display:none}
+.why.open{display:table-row;background:var(--panel-2)}
+.why td{padding:14px 16px 16px;color:var(--muted);font-family:var(--ui);font-size:13px;line-height:1.6}
+.why .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);display:block;margin-bottom:4px}
+.why .risk{margin-top:10px}
+.caret{color:var(--faint);font-family:var(--mono)}
+
+/* ---------- decision feed ---------- */
+.day{border-bottom:1px solid var(--line);padding:16px 18px}
+.day:last-child{border-bottom:none}
+.day-h{display:flex;align-items:baseline;gap:12px;font-family:var(--mono)}
+.day-h .d{font-size:13px;font-weight:600}
+.day-h .m{font-size:11px;color:var(--muted)}
+.day-note{color:var(--muted);font-size:13px;margin:8px 0 10px;max-width:80ch;line-height:1.6;border-left:2px solid var(--line-strong);padding-left:12px}
+.rej{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px}
+.rej .t{color:var(--text);font-weight:600}
+.rej .r{color:var(--muted)}
+.badge{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:3px}
+.badge.no{background:var(--amber-dim);color:var(--amber)}
+.badge.yes{background:var(--green-dim);color:var(--green)}
+
+/* ---------- journal (Obsidian) ---------- */
+.jnote{border-bottom:1px solid var(--line);padding:18px}
+.jnote:last-child{border-bottom:none}
+.jnote-h{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--amber);margin-bottom:8px;letter-spacing:.04em}
+.jbody{color:var(--muted);font-size:13.5px;line-height:1.7;max-width:80ch}
+.jbody h1,.jbody h2,.jbody h3{color:var(--text);font-family:var(--ui);font-size:14px;font-weight:600;margin:14px 0 6px}
+.jbody p{margin:8px 0}
+.jbody ul,.jbody ol{margin:8px 0 8px 20px}
+.jbody li{margin:3px 0}
+.jbody code{font-family:var(--mono);font-size:12px;background:var(--panel-2);border:1px solid var(--line);padding:1px 5px;border-radius:3px}
+.jbody blockquote{border-left:2px solid var(--amber);padding-left:12px;margin:10px 0;color:var(--text)}
+.jbody strong{color:var(--text)}
+.jbody hr{border:none;border-top:1px solid var(--line);margin:14px 0}
+
+footer{padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
+footer .sep{color:var(--line-strong)}
+
+.loading{padding:60px 0;text-align:center;color:var(--muted);font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+
+@media (max-width:900px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .kpi:nth-child(3){border-right:none}
+  .kpi:nth-child(-n+3){border-bottom:1px solid var(--line)}
+  .grid.two{grid-template-columns:1fr}
+  .hmeta .hide-sm{display:none}
+  thead th:nth-child(6),tbody td:nth-child(6){display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hbar">
+    <div class="wordmark">CLAUDE <em>TRADER</em></div>
+    <div class="dayclock" id="dayclock" title="Experiment progress">
+      <span id="dayLabel">DAY — / 90</span>
+      <div class="track"><div class="fill" id="dayFill"></div></div>
+    </div>
+    <div class="hmeta">
+      <span class="hide-sm"><span class="dot" id="statusDot"></span><span id="statusTxt">PAPER · AUTONOMOUS</span></span>
+      <span class="sep hide-sm">|</span>
+      <span id="asOf">as of —</span>
+      <button id="refreshBtn" aria-label="Refresh data">REFRESH</button>
+    </div>
+  </div>
+</header>
+
+<div class="tape">
+  <div class="wrap tape-inner" id="tape">
+    <div class="tape-eyebrow" id="tapeDate">LATEST VERDICT</div>
+    <div class="tape-note" id="tapeNote">Loading the morning wire…</div>
+    <div class="tape-chips" id="tapeChips"></div>
+  </div>
+</div>
+
+<main class="wrap" id="main">
+  <div class="loading" id="loading">Reading the ledger…</div>
+
+  <div id="app" style="display:none">
+    <!-- KPI ledger -->
+    <section class="kpis" aria-label="Key figures">
+      <div class="kpi"><div class="k">Equity</div><div class="v" id="kEquity">—</div><div class="s" id="kEquitySub"></div></div>
+      <div class="kpi"><div class="k">Total P&amp;L</div><div class="v" id="kPnl">—</div><div class="s" id="kPnlSub"></div></div>
+      <div class="kpi"><div class="k">Win rate</div><div class="v" id="kWin">—</div><div class="s" id="kWinSub"></div></div>
+      <div class="kpi"><div class="k">Trades taken</div><div class="v" id="kTrades">—</div><div class="s" id="kTradesSub"></div></div>
+      <div class="kpi"><div class="k">No-trade days</div><div class="v" id="kNoTrade">—</div><div class="s">discipline, not absence</div></div>
+      <div class="kpi"><div class="k">Rejections logged</div><div class="v" id="kRej">—</div><div class="s">counterfactuals tracked</div></div>
+    </section>
+
+    <!-- equity + judgment -->
+    <div class="grid two">
+      <section class="panel">
+        <div class="panel-h"><h2>Equity curve</h2><span class="hint">baseline $100,000 · paper fills</span></div>
+        <div class="panel-b">
+          <div class="chart-wrap"><canvas id="equityChart" role="img" aria-label="Account equity over time"></canvas></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>Judgment readout</h2><span class="hint">from outcomes.csv</span></div>
+        <div class="panel-b" id="judgment">
+          <div class="empty"><b>Awaiting closed trades</b>Win rate by catalyst, conviction calibration, and the rejected-stock aftermath will populate here as outcomes accrue.</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- trades ledger -->
+    <section class="panel" style="margin-bottom:18px">
+      <div class="panel-h"><h2>Trade ledger</h2><span class="hint">click a row for Claude's reasoning</span></div>
+      <div id="tradesWrap">
+        <div class="empty" id="tradesEmpty"><b>No trades executed yet</b>Claude has passed on every candidate so far. Every rejection and its reason is recorded in the decision wire below — sitting out is a decision too.</div>
+        <table id="tradesTable" style="display:none">
+          <thead><tr>
+            <th></th><th>Date</th><th>Ticker</th><th>Catalyst</th><th>Conv.</th><th>Entry ~</th><th>Stop / Target</th><th>Result</th>
+          </tr></thead>
+          <tbody id="tradesBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- decision wire -->
+    <section class="panel">
+      <div class="panel-h"><h2>Decision wire</h2><span class="hint">one verdict per trading day · newest first</span></div>
+      <div id="feed"></div>
+    </section>
+
+    <!-- analyst journal (Obsidian) -->
+    <section class="panel" style="margin-top:18px">
+      <div class="panel-h"><h2>Analyst journal</h2><span class="hint">written in Obsidian · committed to /journal</span></div>
+      <div id="journal">
+        <div class="empty"><b>No entries yet</b>Notes committed to the journal folder render here — the human read on the machine's calls.</div>
+      </div>
+    </section>
+
+    <footer>
+      <span>CLAUDE TRADER · 90-day frozen-rules experiment</span><span class="sep">|</span>
+      <span>Paper account · no real capital</span><span class="sep">|</span>
+      <span>Long-only · max 3/day · 4% stop · 8% target</span><span class="sep">|</span>
+      <a href="https://github.com/ejmacor/Claude-Trader-Experiment-" rel="noopener">Source &amp; logs</a>
+    </footer>
+  </div>
+</main>
+
+<script>
+"use strict";
+/* ---------- config ---------- */
+const START = new Date("2026-07-03T00:00:00-04:00");
+const DAYS = 90, BASELINE = 100000;
+const FILES = {
+  equity: "logs/equity_curve.csv",
+  trades: "logs/trade_log.csv",
+  outcomes: "logs/outcomes.csv",
+  decisions: "logs/decisions.jsonl",
+};
+
+const $ = id => document.getElementById(id);
+const fmt$ = n => n.toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
+const fmt$2 = n => n.toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:2});
+const pct = n => (n>0?"+":"") + n.toFixed(2) + "%";
+const cls = n => n>0.0001?"pos":(n<-0.0001?"neg":"flat");
+const etDate = iso => new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(iso));
+const prettyDate = d => new Date(d+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+
+async function getText(path){
+  try{
+    const r = await fetch(path + "?t=" + Date.now(), {cache:"no-store"});
+    if(!r.ok) return null;
+    return await r.text();
+  }catch(e){ return null; }
+}
+function parseCSV(text){
+  if(!text || !text.trim()) return [];
+  const out = Papa.parse(text.trim(), {header:true, dynamicTyping:true, skipEmptyLines:true});
+  return out.data || [];
+}
+function parseJSONL(text){
+  if(!text) return [];
+  return text.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean);
+}
+const truthy = v => v===true || v==="True" || v==="true";
+
+/* ---------- load ---------- */
+let chart = null;
+async function load(){
+  const [eqT, trT, ouT, deT] = await Promise.all([
+    getText(FILES.equity), getText(FILES.trades), getText(FILES.outcomes), getText(FILES.decisions)
+  ]);
+  const equity = parseCSV(eqT);
+  const trades = parseCSV(trT).filter(r=>r && r.symbol);
+  const outcomes = parseCSV(ouT).filter(r=>r && r.symbol);
+  const raw = parseJSONL(deT);
+
+  /* decisions: last entry per ET date */
+  const byDate = new Map();
+  for(const row of raw){ if(row.timestamp) byDate.set(etDate(row.timestamp), row); }
+  const decisions = [...byDate.entries()].map(([date,row])=>({date,row})).sort((a,b)=>a.date<b.date?1:-1);
+
+  render(equity, trades, outcomes, decisions);
+}
+
+function render(equity, trades, outcomes, decisions){
+  $("loading").style.display = "none";
+  $("app").style.display = "block";
+
+  /* day clock */
+  const now = new Date();
+  const day = Math.min(DAYS, Math.max(0, Math.floor((now - START)/86400000) + 1));
+  $("dayLabel").textContent = `DAY ${day} / ${DAYS}`;
+  $("dayFill").style.width = (day/DAYS*100).toFixed(1) + "%";
+
+  /* as-of */
+  const lastTs = decisions.length ? decisions[0].row.timestamp : null;
+  $("asOf").textContent = "as of " + (lastTs
+    ? new Date(lastTs).toLocaleString("en-US",{timeZone:"America/New_York",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) + " ET"
+    : "— no runs yet");
+
+  /* ---------- verdict tape ---------- */
+  if(decisions.length){
+    const {date,row} = decisions[0];
+    const dec = row.decision || {};
+    const tradedSet = new Set((dec.trades||[]).map(t=>t.symbol));
+    $("tapeDate").textContent = "LATEST VERDICT — " + prettyDate(date).toUpperCase();
+    $("tapeNote").textContent = dec.market_note || "No note recorded for this session.";
+    const chips = (row.candidates_sent||[]).map(c=>{
+      const traded = tradedSet.has(c.symbol);
+      return `<span class="chip ${traded?"traded":"rejected"}"><span class="mark">${traded?"✓":"✗"}</span><span class="tk">${c.symbol}</span><span class="g">+${Number(c.gap_pct).toFixed(1)}%</span></span>`;
+    }).join("");
+    $("tapeChips").innerHTML = chips || `<span class="chip"><span class="g">No candidates passed the screen</span></span>`;
+  } else {
+    $("tapeNote").textContent = "No verdicts on the wire yet. The first scheduled run prints here.";
+  }
+
+  /* ---------- KPIs ---------- */
+  const lastEq = equity.length ? Number(equity[equity.length-1].equity) : BASELINE;
+  const pnl = lastEq - BASELINE, pnlPct = pnl/BASELINE*100;
+  $("kEquity").textContent = fmt$(lastEq);
+  $("kEquitySub").textContent = equity.length ? `${equity.length} snapshot${equity.length>1?"s":""}` : "awaiting first snapshot";
+  $("kPnl").textContent = fmt$(pnl); $("kPnl").className = "v "+cls(pnl);
+  $("kPnlSub").textContent = pct(pnlPct); $("kPnlSub").className = "s "+cls(pnl);
+
+  const closed = outcomes.filter(o=>o.action==="TAKEN" && o.realized_pnl_pct!=="" && o.realized_pnl_pct!=null);
+  const wins = closed.filter(o=>Number(o.realized_pnl_pct)>0).length;
+  $("kWin").textContent = closed.length ? Math.round(wins/closed.length*100)+"%" : "—";
+  $("kWinSub").textContent = closed.length ? `${wins}W / ${closed.length-wins}L` : "no closed trades yet";
+
+  const executed = trades.filter(t=>!truthy(t.skipped));
+  $("kTrades").textContent = executed.length;
+  $("kTradesSub").textContent = executed.length ? "bracketed, day-only" : "capital fully preserved";
+
+  const noTradeDays = decisions.filter(d=>!(d.row.decision?.trades||[]).length).length;
+  $("kNoTrade").textContent = noTradeDays;
+
+  const rejCount = outcomes.filter(o=>o.action==="REJECTED").length
+    || decisions.reduce((n,d)=>n+((d.row.decision?.rejected||[]).length),0);
+  $("kRej").textContent = rejCount;
+
+  /* ---------- equity chart ---------- */
+  const labels = equity.length ? equity.map(r=>r.date) : [new Date().toISOString().slice(0,10)];
+  const values = equity.length ? equity.map(r=>Number(r.equity)) : [BASELINE];
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(chart) chart.destroy();
+  const ctx = $("equityChart").getContext("2d");
+  const grad = ctx.createLinearGradient(0,0,0,300);
+  grad.addColorStop(0,"rgba(232,176,75,.22)"); grad.addColorStop(1,"rgba(232,176,75,0)");
+  chart = new Chart(ctx,{
+    type:"line",
+    data:{labels, datasets:[{
+      data:values, borderColor:"#E8B04B", backgroundColor:grad, fill:true,
+      borderWidth:2, pointRadius:values.length<40?3:0, pointBackgroundColor:"#E8B04B", tension:.25
+    }]},
+    options:{
+      animation: reduce?false:{duration:700},
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}, tooltip:{
+        backgroundColor:"#161A21", borderColor:"#2A313C", borderWidth:1, titleColor:"#8B93A1", bodyColor:"#E8EAED",
+        titleFont:{family:"IBM Plex Mono",size:11}, bodyFont:{family:"IBM Plex Mono",size:12},
+        callbacks:{label:c=>fmt$2(c.parsed.y)}
+      }},
+      scales:{
+        x:{grid:{color:"#1E232B"}, ticks:{color:"#5A6270", font:{family:"IBM Plex Mono",size:10.5}, maxTicksLimit:9}},
+        y:{grid:{color:"#1E232B"}, ticks:{color:"#5A6270", font:{family:"IBM Plex Mono",size:10.5},
+           callback:v=>"$"+(v/1000).toFixed(v%1000?1:0)+"k"}}
+      }
+    },
+    plugins:[{
+      id:"baseline",
+      beforeDraw(c){
+        const y = c.scales.y.getPixelForValue(BASELINE);
+        if(!isFinite(y)) return;
+        const g = c.ctx; g.save(); g.strokeStyle="rgba(139,147,161,.35)"; g.setLineDash([4,4]); g.lineWidth=1;
+        g.beginPath(); g.moveTo(c.chartArea.left,y); g.lineTo(c.chartArea.right,y); g.stroke(); g.restore();
+      }
+    }]
+  });
+
+  /* ---------- judgment readout ---------- */
+  if(outcomes.length){
+    const takenAll = outcomes.filter(o=>o.action==="TAKEN");
+    const rejAll = outcomes.filter(o=>o.action==="REJECTED" && o.open_to_close_pct!=="" && o.open_to_close_pct!=null);
+    let html = "";
+
+    /* catalyst breakdown */
+    const cats = {};
+    for(const t of closed){
+      const c = t.catalyst_type || "other";
+      (cats[c]=cats[c]||{n:0,w:0,sum:0});
+      cats[c].n++; cats[c].sum+=Number(t.realized_pnl_pct);
+      if(Number(t.realized_pnl_pct)>0) cats[c].w++;
+    }
+    const catRows = Object.entries(cats).sort((a,b)=>b[1].n-a[1].n).map(([c,s])=>{
+      const wr = Math.round(s.w/s.n*100);
+      return `<div class="statrow"><span class="lbl">${c} <span style="color:var(--faint)">×${s.n}</span></span>
+        <span class="val ${cls(s.sum)}">${wr}% · avg ${pct(s.sum/s.n)}</span></div>`;
+    }).join("");
+    if(catRows) html += `<div style="margin-bottom:14px"><div class="statrow" style="border-bottom:1px solid var(--line-strong)"><span class="lbl" style="color:var(--amber)">BY CATALYST</span><span class="val" style="color:var(--faint)">win · avg</span></div>${catRows}</div>`;
+
+    /* conviction calibration */
+    const hi = closed.filter(t=>Number(t.conviction)>=7), lo = closed.filter(t=>Number(t.conviction)<7);
+    const avg = a => a.length ? a.reduce((s,t)=>s+Number(t.realized_pnl_pct),0)/a.length : null;
+    if(hi.length||lo.length){
+      html += `<div style="margin-bottom:14px"><div class="statrow" style="border-bottom:1px solid var(--line-strong)"><span class="lbl" style="color:var(--amber)">CONVICTION CALIBRATION</span></div>`;
+      if(hi.length) html += `<div class="statrow"><span class="lbl">High (7–10) ×${hi.length}</span><span class="val ${cls(avg(hi))}">${pct(avg(hi))} avg</span></div>`;
+      if(lo.length) html += `<div class="statrow"><span class="lbl">Low (1–6) ×${lo.length}</span><span class="val ${cls(avg(lo))}">${pct(avg(lo))} avg</span></div>`;
+      html += `</div>`;
+    }
+
+    /* the road not taken */
+    if(rejAll.length){
+      const a = rejAll.reduce((s,o)=>s+Number(o.open_to_close_pct),0)/rejAll.length;
+      const fell = rejAll.filter(o=>Number(o.open_to_close_pct)<0).length;
+      html += `<div><div class="statrow" style="border-bottom:1px solid var(--line-strong)"><span class="lbl" style="color:var(--amber)">THE ROAD NOT TAKEN</span></div>
+        <div class="statrow"><span class="lbl">Rejected, open→close ×${rejAll.length}</span><span class="val ${cls(-a)==="pos"?"pos":cls(a)}">${pct(a)} avg</span></div>
+        <div class="statrow"><span class="lbl">Fell after rejection</span><span class="val">${fell} of ${rejAll.length}</span>
+        </div>
+        <div class="bar" title="share that fell"><span style="width:${(fell/rejAll.length*100).toFixed(0)}%"></span></div></div>`;
+    }
+    if(html) $("judgment").innerHTML = html;
+  }
+
+  /* ---------- trade ledger ---------- */
+  if(executed.length){
+    $("tradesEmpty").style.display = "none";
+    $("tradesTable").style.display = "table";
+    const outBySym = {};
+    for(const o of outcomes) if(o.action==="TAKEN") outBySym[o.date+"|"+o.symbol]=o;
+    $("tradesBody").innerHTML = executed.slice().reverse().map((t,i)=>{
+      const o = outBySym[t.date+"|"+t.symbol];
+      const res = o && o.realized_pnl_pct!=="" && o.realized_pnl_pct!=null ? Number(o.realized_pnl_pct) : null;
+      return `
+      <tr class="row" data-i="${i}" tabindex="0" role="button" aria-expanded="false">
+        <td class="caret">▸</td>
+        <td>${t.date}</td>
+        <td class="tk">${t.symbol}</td>
+        <td>${t.catalyst_type||"—"}</td>
+        <td>${t.conviction||"—"}/10</td>
+        <td>${t.ref_price?("$"+Number(t.ref_price).toFixed(2)):"—"}</td>
+        <td>${t.stop?("$"+Number(t.stop).toFixed(2)):"—"} / ${t.target?("$"+Number(t.target).toFixed(2)):"—"}</td>
+        <td class="${res==null?"":cls(res)}">${res==null?"open / pending":pct(res)}</td>
+      </tr>
+      <tr class="why" id="why-${i}"><td colspan="8">
+        <span class="tag">Claude's reasoning</span>${t.reasoning||"—"}
+        <div class="risk"><span class="tag">Key risk it named</span>${t.key_risk||"—"}</div>
+      </td></tr>`;
+    }).join("");
+    $("tradesBody").addEventListener("click", e=>{
+      const row = e.target.closest("tr.row"); if(!row) return;
+      toggleWhy(row);
+    });
+    $("tradesBody").addEventListener("keydown", e=>{
+      if(e.key!=="Enter" && e.key!==" ") return;
+      const row = e.target.closest("tr.row"); if(!row) return;
+      e.preventDefault(); toggleWhy(row);
+    });
+  }
+
+  /* ---------- decision wire ---------- */
+  if(decisions.length){
+    $("feed").innerHTML = decisions.map(({date,row})=>{
+      const dec = row.decision||{};
+      const trades = dec.trades||[], rejected = dec.rejected||[];
+      const badge = trades.length
+        ? `<span class="badge yes">${trades.length} trade${trades.length>1?"s":""}</span>`
+        : `<span class="badge no">no trade</span>`;
+      const rej = rejected.map(r=>`<div class="rej"><span class="t">${r.symbol}</span> — <span class="r">${r.reason||""}</span></div>`).join("");
+      return `<div class="day">
+        <div class="day-h"><span class="d">${prettyDate(date)}</span>${badge}<span class="m">${(row.candidates_sent||[]).length} candidates screened</span></div>
+        ${dec.market_note?`<div class="day-note">${dec.market_note}</div>`:""}
+        ${rej}
+      </div>`;
+    }).join("");
+  } else {
+    $("feed").innerHTML = `<div class="empty"><b>The wire is quiet</b>Verdicts appear here after each trading morning — including the days Claude declines everything.</div>`;
+  }
+}
+
+function toggleWhy(row){
+  const why = document.getElementById("why-"+row.dataset.i);
+  const open = why.classList.toggle("open");
+  row.setAttribute("aria-expanded", open);
+  row.querySelector(".caret").textContent = open ? "▾" : "▸";
+}
+
+/* ---------- analyst journal (Obsidian -> /journal -> here) ---------- */
+const REPO = "ejmacor/Claude-Trader-Experiment-";
+async function loadJournal(){
+  try{
+    const r = await fetch(`https://api.github.com/repos/${REPO}/contents/journal`, {cache:"no-store"});
+    if(!r.ok) return; // folder doesn't exist yet — empty state stands
+    const files = (await r.json()).filter(f=>f.type==="file" && f.name.endsWith(".md"))
+      .sort((a,b)=>a.name<b.name?1:-1); // YYYY-MM-DD names sort newest-first
+    if(!files.length) return;
+    const notes = await Promise.all(files.slice(0,20).map(async f=>{
+      const t = await (await fetch(f.download_url, {cache:"no-store"})).text();
+      return {name:f.name.replace(/\.md$/,""), md:t};
+    }));
+    $("journal").innerHTML = notes.map(n=>`
+      <article class="jnote">
+        <div class="jnote-h">${n.name}</div>
+        <div class="jbody">${marked.parse(n.md)}</div>
+      </article>`).join("");
+  }catch(e){ /* journal stays in empty state */ }
+}
+
+$("refreshBtn").addEventListener("click", ()=>{ $("refreshBtn").textContent="…"; Promise.all([load(),loadJournal()]).then(()=>{$("refreshBtn").textContent="REFRESH";}); });
+
+load();
+loadJournal();
+</script>
+</body>
+</html>
