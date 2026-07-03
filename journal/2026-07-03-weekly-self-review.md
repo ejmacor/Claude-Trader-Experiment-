@@ -1,21 +1,25 @@
 *Machine-written post-mortem — Claude reviewing its own week of 2026-06-29 to 2026-07-03. Write-only: the trading model never reads this.*
 
-A short, quiet week with zero trades taken and one costly-looking miss, but the reasoning mostly holds up under scrutiny.
+A holiday-shortened week of pure rejection — no trades placed, one painful open-to-close miss, and no basis for any pattern conclusions.
 
-## Decisions
+## Decisions and Reasoning Quality
 
-Only one active trading day recorded, July 2, with three candidates and all three rejected. [[ticker-CLRO]] was the headliner: a 100%+ gap on a prior-day [[catalyst-ma]] that involved simultaneous share issuance and an S-1 dilution filing for $10–15M. The rejection logic was sound — the catalyst was stale by definition, dilution is a structural anchor on continuation, and a $8.6M market cap with circuit-breaker halts is textbook [[pattern-already-run-gaps]] combined with elevated pump risk. [[ticker-MIDDV]] was correctly identified as a spinoff/distribution artifact with [[catalyst-none]] of the tradeable variety — "when issued" mechanics don't produce continuation setups, and passing was automatic. [[ticker-SLBT]] was rejected for lack of any verifiable catalyst; the headlines didn't even name the stock, which is the bare minimum threshold for entry.
+Only one trading day generated candidates: July 2. All three were rejected. Let's grade each.
 
-## Rejections Reviewed
+[[ticker-CLRO]] was rejected for being a dilutive micro-cap that had already doubled on an [[catalyst-ma]] deal involving a concurrent S-1 shelf filing. The reasoning was sound — structural dilution headwind, micro-cap halt behavior, and a catalyst fully absorbed by a 100%+ prior-day gap all point to [[pattern-already-run-gaps]]. The stock then went up 82.73% open-to-close on July 2. That is a brutal miss in dollar terms if you imagine the trade working, but the reasoning was not wrong. A $8.6M market-cap name with active dilution filing and circuit-breaker halts is precisely the profile that blows up 60% of the time and pays off 40%. Rejecting it was the correct process even though the outcome would have been profitable. Grade: sound judgment, unlucky result. [[call-2026-07-02-CLRO]] almost certainly would have hit the 4% bracket early and closed green, but the risk profile did not justify entry under the strategy's implicit quality filter.
 
-The worst miss of the week is [[ticker-CLRO]], which ran another 82.73% open-to-close. [[miss-2026-07-02-CLRO]] is real and it stings to look at on paper, but the judgment was still correct. A dilutive micro-cap already up 100% the prior day, trading through halts, with an imminent shelf offering, is not a sound long setup under this strategy's logic. That it ran further is a reminder that pumps can extend, not a signal that dilution risk was mispriced. Grading the reasoning: sound. The outcome was luck, not edge.
+[[ticker-MIDDV]] was rejected as a spinoff distribution artifact with [[catalyst-none]] — no outcome data available, but the rejection reasoning is airtight. "When issued" tickers are mechanical price events, not catalysts. No grade stress here.
 
-[[ticker-SLBT]] gained 36.59% open-to-close, making it the second miss. The [[catalyst-none]] rejection was also justified — entering a 34% gap with zero verifiable fundamental driver is speculation, not catalyst trading. [[call-2026-07-02-MIDDV]] goes to the MIDDV pass, which had no outcome data and was structurally untradeable regardless.
+[[ticker-SLBT]] was rejected for having no identifiable catalyst; the news wires didn't even name it directly. It closed up 36.59% open-to-close. This is the week's worst miss in terms of regret, but the logic holds: a gap with no verifiable fundamental driver is not a strategy-eligible trade. [[miss-2026-07-02-SLBT]] registers in the graph because a 36% open-to-close move on a health care name warrants tracking — if there was a catalyst buried in the tape that wasn't surfaced by the screener, that's a data-quality gap worth watching, not a judgment error. [[pattern-catalyst-visibility-gap]] is a new pattern node for situations where a real catalyst existed but wasn't surfaced in the candidate data.
 
 ## Calibration and Sample Size
 
-Three rejections, zero trades, one week of data. Saying anything about conviction calibration here would be fiction. The cumulative record is flat at $100,000 with no positions taken. The only honest assessment is that the filter is functioning as designed — it is keeping out low-quality setups — but there is no signal yet on whether it is also filtering out good ones systematically.
+Zero trades, three rejections, one live trading day. There is nothing to say about conviction calibration or win rates. Stating otherwise would be dishonest. The equity curve is flat at $100,000 by construction, not by skill or failure.
 
-**Hypothesis worth testing in v2:** [[pattern-already-run-gaps]] candidates with 50%+ prior-day moves and genuine catalysts (even dilutive M&A) may have a statistically different continuation profile on day two versus day three. Not actionable under current rules, but worth logging for a backtested variant.
+The holiday tape (July 3 close, July 4 weekend) may have contributed to the thin candidate pool. [[pattern-holiday-tape-junk]] is consistent with prior reviews noting that pre-holiday sessions surface low-quality, low-liquidity setups disproportionately.
 
-Threads: [[ticker-CLRO]] [[ticker-SLBT]] [[catalyst-ma]] [[catalyst-none]] [[pattern-already-run-gaps]] [[miss-2026-07-02-CLRO]]
+**Hypothesis for v2 (not a rule change):** Track whether rejected no-catalyst gaps ([[catalyst-none]]) that still move 30%+ open-to-close tend to have a discoverable catalyst in post-hoc research. If yes, the screener's headline quality is the binding constraint, not the judgment layer.
+
+---
+
+Threads: [[ticker-CLRO]] [[ticker-SLBT]] [[catalyst-ma]] [[catalyst-none]] [[pattern-already-run-gaps]] [[pattern-holiday-tape-junk]] [[pattern-catalyst-visibility-gap]] [[miss-2026-07-02-SLBT]] [[call-2026-07-02-CLRO]]
