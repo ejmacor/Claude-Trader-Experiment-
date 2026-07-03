@@ -11,7 +11,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.79.0/dist/3d-force-graph.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three-spritetext@1.10.0/dist/three-spritetext.min.js"></script>
 <style>
 :root{
   --bg:#0B0D10;
@@ -146,14 +147,13 @@ tbody tr.row{cursor:pointer}
 .jbody hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
 /* ---------- brain map ---------- */
-#brainWrap{position:relative;height:420px;background:radial-gradient(ellipse at 50% 40%,#10141B 0%,var(--bg) 75%)}
-#brain{width:100%;height:100%;display:block;cursor:grab}
-#brain:active{cursor:grabbing}
-.legend{position:absolute;top:12px;left:14px;font-family:var(--mono);font-size:10.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px;pointer-events:none}
+#brainWrap{position:relative;height:480px;background:radial-gradient(ellipse at 50% 40%,#10141B 0%,var(--bg) 75%);overflow:hidden}
+#brain3d{width:100%;height:100%}
+#brain3d canvas{outline:none}
+.legend{position:absolute;top:12px;left:14px;font-family:var(--mono);font-size:10.5px;color:var(--muted);display:flex;flex-direction:column;gap:4px;pointer-events:none;z-index:4}
 .legend span{display:flex;align-items:center;gap:6px}
 .legend i{width:8px;height:8px;border-radius:50%;display:inline-block}
-#brainTip{position:absolute;pointer-events:none;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:4px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;color:var(--text);opacity:0;transition:opacity .12s;white-space:nowrap;z-index:5}
-.brain-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:0 40px}
+.brain-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:0 40px;z-index:3}
 
 footer{padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:11px;display:flex;gap:16px;flex-wrap:wrap}
 footer .sep{color:var(--line-strong)}
@@ -252,9 +252,9 @@ footer .sep{color:var(--line-strong)}
 
     <!-- brain map -->
     <section class="panel" style="margin-top:18px">
-      <div class="panel-h"><h2>Brain map</h2><span class="hint">scroll to zoom · drag background to pan · click a node to enter its cluster · double-click to reset</span></div>
+      <div class="panel-h"><h2>Brain map</h2><span class="hint">drag to orbit · scroll to zoom · right-drag to pan · click a node to fly to it · double-click background to reset</span></div>
       <div id="brainWrap">
-        <canvas id="brain" aria-label="Knowledge graph of patterns, tickers and catalysts from the journal"></canvas>
+        <div id="brain3d" aria-label="3D knowledge graph of patterns, tickers and catalysts from the journal"></div>
         <div class="legend">
           <span><i style="background:#E8B04B"></i>pattern</span>
           <span><i style="background:#8B93A1"></i>ticker</span>
@@ -263,7 +263,6 @@ footer .sep{color:var(--line-strong)}
           <span><i style="background:#2FBF71"></i>call</span>
           <span><i style="background:#E8EAED"></i>review</span>
         </div>
-        <div id="brainTip"></div>
         <div class="brain-empty" id="brainEmpty" style="display:none">The map draws itself as weekly reviews accumulate links — patterns grow heavier each time a behavior recurs.</div>
       </div>
     </section>
@@ -570,119 +569,56 @@ function buildBrain(notes){
   }
   return {nodes:[...nodes.values()], links};
 }
+let brainGraph = null;
 function renderBrain(notes){
   const wrap = document.getElementById("brainWrap");
-  const canvas = document.getElementById("brain");
-  const tip = document.getElementById("brainTip");
+  const el = document.getElementById("brain3d");
   const {nodes, links} = buildBrain(notes||[]);
   if(!links.length){ document.getElementById("brainEmpty").style.display="flex"; return; }
   document.getElementById("brainEmpty").style.display="none";
+  if(brainGraph){ brainGraph.graphData({nodes, links}); return; }
 
-  const dpr = window.devicePixelRatio||1;
-  const W = wrap.clientWidth, H = wrap.clientHeight;
-  canvas.width = W*dpr; canvas.height = H*dpr;
-  const ctx = canvas.getContext("2d");
+  const HOME = {x:0, y:0, z:320};
+  brainGraph = ForceGraph3D()(el)
+    .width(wrap.clientWidth).height(wrap.clientHeight)
+    .backgroundColor("rgba(0,0,0,0)")
+    .showNavInfo(false)
+    .graphData({nodes, links})
+    .nodeColor(n=>nodeMeta(n.id).c)
+    .nodeVal(n=>1.2+n.deg*1.4)
+    .nodeOpacity(.92)
+    .nodeLabel(n=>`<div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#161A21;border:1px solid #2A313C;border-radius:4px;padding:4px 8px;color:#E8EAED">${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}</div>`)
+    .linkColor(()=> "#8B93A1")
+    .linkOpacity(.28)
+    .linkWidth(0)
+    .nodeThreeObjectExtend(true)
+    .nodeThreeObject(n=>{
+      const m = nodeMeta(n.id);
+      if(m.t!=="pattern" && !(n.note) && n.deg<3) return undefined;
+      const s = new SpriteText(n.id.replace(/^(pattern|ticker|catalyst)-/,""), 3.4, m.t==="pattern"?"#E8B04B":"#A6ADBB");
+      s.fontFace = "IBM Plex Mono, monospace";
+      s.position.y = -(6 + Math.sqrt(1.2+n.deg*1.4)*3);
+      return s;
+    })
+    .onNodeClick(n=>{
+      // fly the camera to the node
+      const d = 55;
+      const r = 1 + d/Math.hypot(n.x||1, n.y||1, n.z||1);
+      brainGraph.cameraPosition({x:(n.x||0)*r, y:(n.y||0)*r, z:(n.z||0)*r}, n, 900);
+    })
+    .onBackgroundClick(()=>{})
+    .cooldownTicks(140);
 
-  /* neighbor index for focus mode */
-  const nbr = new Map(nodes.map(n=>[n.id,new Set([n.id])]));
-  for(const l of links){ nbr.get(l.source.id||l.source).add(l.target.id||l.target); nbr.get(l.target.id||l.target).add(l.source.id||l.source); }
+  /* gentle controls */
+  const c = brainGraph.controls();
+  c.zoomSpeed = 0.35;          // the sensitivity fix
+  c.rotateSpeed = 0.65;
+  c.panSpeed = 0.6;
+  c.enableDamping = true; c.dampingFactor = .08;
 
-  let view = {x:0, y:0, k:1};          // camera
-  let focus = null;                     // focused node id set
-  const radius = n => nodeMeta(n.id).r + Math.sqrt(n.deg)*1.6;
-
-  const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(d=>d.id).distance(70).strength(.5))
-    .force("charge", d3.forceManyBody().strength(-160))
-    .force("center", d3.forceCenter(W/2, H/2))
-    .force("collide", d3.forceCollide().radius(d=>10+Math.sqrt(d.deg)*3));
-
-  function draw(){
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.clearRect(0,0,W,H);
-    ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
-    const inFocus = id => !focus || focus.has(id);
-
-    ctx.lineWidth = 1/view.k;
-    for(const l of links){
-      const on = inFocus(l.source.id) && inFocus(l.target.id);
-      ctx.strokeStyle = on ? "rgba(139,147,161,.28)" : "rgba(139,147,161,.05)";
-      ctx.beginPath(); ctx.moveTo(l.source.x,l.source.y); ctx.lineTo(l.target.x,l.target.y); ctx.stroke();
-    }
-    for(const n of nodes){
-      const m = nodeMeta(n.id), r = radius(n), on = inFocus(n.id);
-      ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
-      ctx.fillStyle = m.c; ctx.globalAlpha = on ? .95 : .10; ctx.fill();
-      if(on && (focus || n.deg>=3 || m.t==="pattern")){
-        ctx.font = `${10/Math.sqrt(view.k)}px 'IBM Plex Mono',monospace`;
-        ctx.fillStyle = "#A6ADBB"; ctx.globalAlpha = .95;
-        ctx.fillText(n.id.replace(/^(pattern|ticker|catalyst)-/,""), n.x+r+4, n.y+3);
-      }
-      ctx.globalAlpha = 1;
-    }
-  }
-  sim.on("tick", draw);
-
-  /* ---- camera helpers ---- */
-  const toWorld = (sx,sy) => [(sx-view.x)/view.k, (sy-view.y)/view.k];
-  let anim = null;
-  function glideTo(target, ms=450){
-    cancelAnimationFrame(anim);
-    const from = {...view}, t0 = performance.now();
-    const ease = t => 1-Math.pow(1-t,3);
-    (function step(now){
-      const t = Math.min(1,(now-t0)/ms), e = ease(t);
-      view = {x:from.x+(target.x-from.x)*e, y:from.y+(target.y-from.y)*e, k:from.k+(target.k-from.k)*e};
-      draw();
-      if(t<1) anim = requestAnimationFrame(step);
-    })(t0);
-  }
-  function focusOn(node){
-    focus = nbr.get(node.id);
-    const pts = nodes.filter(n=>focus.has(n.id));
-    const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
-    const cx=(Math.min(...xs)+Math.max(...xs))/2, cy=(Math.min(...ys)+Math.max(...ys))/2;
-    const span = Math.max(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys), 120);
-    const k = Math.min(2.8, Math.max(.4, Math.min(W,H)/(span*1.5)));
-    glideTo({k, x:W/2-cx*k, y:H/2-cy*k});
-  }
-  function reset(){ focus=null; glideTo({x:0,y:0,k:1}); }
-
-  /* ---- interaction ---- */
-  const pos = e => { const b = canvas.getBoundingClientRect(); return [e.clientX-b.left, e.clientY-b.top]; };
-  const find = (sx,sy) => { const [x,y]=toWorld(sx,sy); return nodes.find(n=>(n.x-x)**2+(n.y-y)**2 < Math.max(radius(n)+4/view.k, 8/view.k)**2); };
-
-  let drag=null, panning=null, moved=false;
-  canvas.addEventListener("pointerdown", e=>{
-    const [sx,sy]=pos(e); moved=false;
-    const n = find(sx,sy);
-    if(n){ drag=n; sim.alphaTarget(.25).restart(); const [wx,wy]=toWorld(sx,sy); n.fx=wx; n.fy=wy; }
-    else panning={sx,sy,vx:view.x,vy:view.y};
-    canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener("pointermove", e=>{
-    const [sx,sy]=pos(e);
-    if(drag){ moved=true; const [wx,wy]=toWorld(sx,sy); drag.fx=wx; drag.fy=wy; return; }
-    if(panning){ moved=true; view.x=panning.vx+(sx-panning.sx); view.y=panning.vy+(sy-panning.sy); draw(); return; }
-    const n = find(sx,sy);
-    if(n){ tip.textContent=`${n.id} · ${nodeMeta(n.id).t} · ${n.deg} link${n.deg!==1?"s":""}`;
-           tip.style.left=(sx+14)+"px"; tip.style.top=(sy-8)+"px"; tip.style.opacity=1;
-           canvas.style.cursor="pointer"; }
-    else { tip.style.opacity=0; canvas.style.cursor=panning?"grabbing":"grab"; }
-  });
-  canvas.addEventListener("pointerup", e=>{
-    if(drag){ const n=drag; drag=null; n.fx=null; n.fy=null; sim.alphaTarget(0);
-      if(!moved) focusOn(n);            // click (no drag) = zoom into its cluster
-    } else if(panning){ panning=null; if(!moved && focus) { focus=null; draw(); } }
-  });
-  canvas.addEventListener("dblclick", e=>{ e.preventDefault(); reset(); });
-  canvas.addEventListener("wheel", e=>{
-    e.preventDefault();
-    const [sx,sy]=pos(e), [wx,wy]=toWorld(sx,sy);
-    const k = Math.min(4, Math.max(.3, view.k * (e.deltaY<0 ? 1.15 : 1/1.15)));
-    view = {k, x:sx-wx*k, y:sy-wy*k};
-    draw();
-  }, {passive:false});
+  brainGraph.cameraPosition(HOME);
+  el.addEventListener("dblclick", ()=> brainGraph.cameraPosition(HOME, {x:0,y:0,z:0}, 800));
+  window.addEventListener("resize", ()=> brainGraph.width(wrap.clientWidth).height(wrap.clientHeight));
 }
 
 /* ---------- analyst journal (Obsidian -> /journal -> here) ---------- */
