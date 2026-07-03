@@ -12,7 +12,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1"></script>
-<script src="https://cdn.jsdelivr.net/npm/three-spritetext@1"></script>
 <style>
 :root{
   --bg:#0B0D10;
@@ -286,6 +285,13 @@ footer .sep{color:var(--line-strong)}
 
 <script>
 "use strict";
+window.addEventListener("error", e=>{
+  const be = document.getElementById("brainEmpty");
+  if(be && be.style.display!=="flex" && /THREE|ForceGraph|three/i.test(e.message||"")){
+    be.textContent = "Brain map couldn't render: " + e.message;
+    be.style.display = "flex";
+  }
+});
 /* ---------- config ---------- */
 const START = new Date("2026-07-03T00:00:00-04:00");
 const DAYS = 90, BASELINE = 100000;
@@ -591,15 +597,6 @@ function renderBrain(notes){
     .linkColor(()=> "#8B93A1")
     .linkOpacity(.28)
     .linkWidth(0)
-    .nodeThreeObjectExtend(true)
-    .nodeThreeObject(n=>{
-      const m = nodeMeta(n.id);
-      if(m.t!=="pattern" && !(n.note) && n.deg<3) return undefined;
-      const s = new SpriteText(n.id.replace(/^(pattern|ticker|catalyst)-/,""), 3.4, m.t==="pattern"?"#E8B04B":"#A6ADBB");
-      s.fontFace = "IBM Plex Mono, monospace";
-      s.position.y = -(6 + Math.sqrt(1.2+n.deg*1.4)*3);
-      return s;
-    })
     .onNodeClick(n=>{
       // fly the camera to the node
       const d = 55;
