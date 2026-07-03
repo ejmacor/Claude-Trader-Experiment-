@@ -6,6 +6,7 @@ A standalone system where Claude analyzes pre-market news catalysts each morning
 
 ---
 
+
 ## Setup — do this tonight (~30 minutes)
 
 ### Step 1: Get an Alpaca paper account (free)
