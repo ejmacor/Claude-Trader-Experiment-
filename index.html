@@ -11,8 +11,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.79.0/dist/3d-force-graph.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three-spritetext@1.10.0/dist/three-spritetext.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1"></script>
+<script src="https://cdn.jsdelivr.net/npm/three-spritetext@1"></script>
 <style>
 :root{
   --bg:#0B0D10;
@@ -639,7 +639,15 @@ async function loadJournal(){
         <div class="jnote-h">${n.name}</div>
         <div class="jbody">${marked.parse(n.md.replace(/\[\[([^\[\]|]+?)(?:\|([^\[\]]*))?\]\]/g, (_,a,b)=>`<em>${b||a}</em>`))}</div>
       </article>`).join("");
-    renderBrain(notes);
+    try{
+      if(typeof ForceGraph3D === "undefined") throw new Error("3D library failed to load");
+      renderBrain(notes);
+    }catch(err){
+      const be = document.getElementById("brainEmpty");
+      be.textContent = "Brain map couldn't render: " + err.message;
+      be.style.display = "flex";
+      console.error("Brain map:", err);
+    }
   }catch(e){ /* journal stays in empty state */ }
 }
 
