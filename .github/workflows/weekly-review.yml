@@ -1,0 +1,73 @@
+name: Weekly Self-Review
+
+on:
+  schedule:
+    # Fridays 21:40 UTC = 5:40pm ET during EDT (after the evening review
+    # has committed the week's outcomes at ~21:10).
+    # NOTE: When clocks change to EST in November, update to '40 22 * * 5'.
+    - cron: '40 21 * * 5'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # commits the journal entry
+
+concurrency:
+  group: weekly-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+
+      - name: Claude reviews its own week
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python self_review.py | tee review_out.txt
+
+      - name: Commit journal entry
+        run: |
+          git config user.name "claude-trader-bot"
+          git config user.email "actions@github.com"
+          git add journal/ || true
+          git diff --cached --quiet || git commit -m "journal: weekly self-review $(date -u +%F)"
+          git push
+
+      - name: Notify phone with the verdict
+        if: always()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, re, urllib.request
+
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              print("No NTFY_TOPIC secret set; skipping.")
+              raise SystemExit(0)
+
+          msg = "Weekly self-review posted to the dashboard journal."
+          try:
+              out = open("review_out.txt").read()
+              m = re.search(r"SUMMARY_START\n(.*?)\nSUMMARY_END", out, re.S)
+              if m:
+                  msg = m.group(1).strip()[:400] + "\n\nFull review on the dashboard."
+              elif "skipping review" in out:
+                  msg = "Quiet week — no decisions to review."
+          except FileNotFoundError:
+              pass
+
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=msg.encode("utf-8"),
+              headers={"Title": "Claude Trader: weekly self-review", "Tags": "brain"},
+          )
+          urllib.request.urlopen(req, timeout=30)
+          print("Notification sent.")
+          EOF
