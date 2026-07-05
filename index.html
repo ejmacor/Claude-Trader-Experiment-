@@ -156,7 +156,10 @@ tbody tr.row{cursor:pointer}
 /* ---------- journal (Obsidian) ---------- */
 .jnote{border-bottom:1px solid var(--line);padding:18px}
 .jnote:last-child{border-bottom:none}
-.jnote-h{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--amber);margin-bottom:8px;letter-spacing:.04em}
+.jnote .jbody{display:none}
+.jnote.open .jbody{display:block}
+.jnote-h{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--amber);margin-bottom:8px;letter-spacing:.04em;cursor:pointer;user-select:none}
+.jnote:not(.open) .jnote-h{margin-bottom:0}
 .jbody{color:var(--muted);font-size:13.5px;line-height:1.7;max-width:80ch}
 .jbody h1,.jbody h2,.jbody h3{color:var(--text);font-family:var(--ui);font-size:14px;font-weight:600;margin:14px 0 6px}
 .jbody p{margin:8px 0}
@@ -704,6 +707,13 @@ function toggleDay(h){
   h.querySelector(".caret").textContent = open ? "▾" : "▸";
 }
 
+function toggleNote(h){
+  const note = h.closest(".jnote");
+  const open = note.classList.toggle("open");
+  h.setAttribute("aria-expanded", open);
+  h.querySelector(".caret").textContent = open ? "▾" : "▸";
+}
+
 function toggleWhy(row){
   const why = document.getElementById("why-"+row.dataset.i);
   const open = why.classList.toggle("open");
@@ -812,9 +822,9 @@ async function loadJournal(){
       const t = await (await fetch(f.download_url, {cache:"no-store"})).text();
       return {name:f.name.replace(/\.md$/,""), md:t};
     }));
-    $("journal").innerHTML = notes.map(n=>`
-      <article class="jnote">
-        <div class="jnote-h">${n.name}</div>
+    $("journal").innerHTML = notes.map((n,i)=>`
+      <article class="jnote${i===0?" open":""}">
+        <div class="jnote-h" role="button" tabindex="0" aria-expanded="${i===0}" onclick="toggleNote(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleNote(this)}">${n.name}<span class="caret" style="float:right">${i===0?"▾":"▸"}</span></div>
         <div class="jbody">${marked.parse(n.md.replace(/\[\[([^\[\]|]+?)(?:\|([^\[\]]*))?\]\]/g, (_,a,b)=>`<em>${b||a}</em>`))}</div>
       </article>`).join("");
     try{
