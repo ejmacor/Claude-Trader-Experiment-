@@ -12,8 +12,11 @@ from zoneinfo import ZoneInfo
 import requests
 
 import analyst
+import benchmark
+import challenger
 import executor
 import scanner
+import shadow_gate
 import trade_logger
 
 
@@ -68,6 +71,34 @@ def main():
     trade_logger.log_decision(candidates, decision)
     print(f"      Market note: {decision.get('market_note', '')}")
     print(f"      Trades recommended: {len(decision['trades'])}")
+
+    # 2b. Shadow risk gate — OBSERVES ONLY. Logs what it would veto/flag,
+    #     never alters the decision. Firewalled: a gate crash can't stop trading.
+    try:
+        gate = shadow_gate.evaluate(
+            candidates, decision,
+            open_position_count=len(executor.get_open_positions()),
+        )
+        s = gate["summary"]
+        print(f"      Shadow gate: {s['would_allow']} allow / {s['flagged']} flagged / {s['would_veto']} would-veto (advisory only)")
+    except Exception as e:  # noqa: BLE001
+        print(f"      Shadow gate error (ignored, live run unaffected): {e}")
+
+    # 2c. Shadow challenger — second Claude call plays risk officer and
+    #     confirms/rejects each proposal. Logged only; forms the v2 track.
+    try:
+        chall = challenger.review(candidates, decision)
+        verdicts = {r["symbol"]: r["verdict"] for r in chall.get("reviews", [])}
+        if verdicts:
+            print("      Challenger:", ", ".join(f"{k}={v}" for k, v in verdicts.items()), "(advisory only)")
+    except Exception as e:  # noqa: BLE001
+        print(f"      Challenger error (ignored, live run unaffected): {e}")
+
+    # 2d. Benchmark — log SPY close for the dashboard's market-comparison line.
+    try:
+        benchmark.log_spy()
+    except Exception as e:  # noqa: BLE001
+        print(f"      Benchmark log error (ignored): {e}")
 
     # 3. Execute
     print("\n[3/4] Placing bracket orders (PAPER)...")

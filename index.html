@@ -131,6 +131,28 @@ tbody tr.row{cursor:pointer}
 .badge.no{background:var(--amber-dim);color:var(--amber)}
 .badge.yes{background:var(--green-dim);color:var(--green)}
 
+/* decision-wire dropdown */
+.day-h{cursor:pointer;user-select:none}
+.day-h:hover .d{color:var(--amber)}
+.day-h .caret{margin-left:auto}
+.day-b{display:none}
+.day.open .day-b{display:block}
+
+/* ---------- shadow gate ---------- */
+.sg-day{border-bottom:1px solid var(--line);padding:14px 18px}
+.sg-day:last-child{border-bottom:none}
+.sg-h{display:flex;align-items:baseline;gap:12px;font-family:var(--mono)}
+.sg-h .d{font-size:13px;font-weight:600}
+.sg-h .m{font-size:11px;color:var(--muted)}
+.badge.veto{background:var(--red-dim);color:var(--red)}
+.badge.flag{background:var(--amber-dim);color:var(--amber)}
+.badge.clear{background:var(--green-dim);color:var(--green)}
+.sg-trade{font-family:var(--mono);font-size:12px;margin-top:8px}
+.sg-trade .t{color:var(--text);font-weight:600}
+.sg-flag{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:3px 0 0 14px}
+.sg-flag .rule{color:var(--amber);letter-spacing:.05em}
+.sg-flag.v .rule{color:var(--red)}
+
 /* ---------- journal (Obsidian) ---------- */
 .jnote{border-bottom:1px solid var(--line);padding:18px}
 .jnote:last-child{border-bottom:none}
@@ -218,7 +240,7 @@ footer .sep{color:var(--line-strong)}
     <!-- equity + judgment -->
     <div class="grid two">
       <section class="panel">
-        <div class="panel-h"><h2>Equity curve</h2><span class="hint">baseline $100,000 · paper fills</span></div>
+        <div class="panel-h"><h2>Equity curve</h2><span class="hint">v1 live · v2 shadow counterfactual · SPY benchmark</span></div>
         <div class="panel-b">
           <div class="chart-wrap"><canvas id="equityChart" role="img" aria-label="Account equity over time"></canvas></div>
         </div>
@@ -278,6 +300,14 @@ footer .sep{color:var(--line-strong)}
       </div>
     </section>
 
+    <!-- shadow pipeline (v2 candidate) -->
+    <section class="panel" style="margin-top:18px">
+      <div class="panel-h"><h2>Shadow pipeline — v2 candidate</h2><span class="hint" id="sgHint">gate + challenger · observes only · never touches the live run</span></div>
+      <div id="shadowGate">
+        <div class="empty" id="sgEmpty"><b>The gate is watching</b>Every proposed trade gets scored twice: deterministic risk rules (the gate) and a second Claude playing risk officer (the challenger). v2 hypothetically takes only trades that survive both. Verdicts land here; the equity curve charts what v2 would have earned. At day 45, if v2 leads v1, it earns promotion.</div>
+      </div>
+    </section>
+
     <footer>
       <span>CLAUDE TRADER · 90-day frozen-rules experiment</span><span class="sep">|</span>
       <span>Paper account · no real capital</span><span class="sep">|</span>
@@ -304,6 +334,9 @@ const FILES = {
   trades: "logs/trade_log.csv",
   outcomes: "logs/outcomes.csv",
   decisions: "logs/decisions.jsonl",
+  shadow: "logs/shadow_gate.jsonl",
+  challenger: "logs/challenger.jsonl",
+  benchmark: "logs/benchmark.csv",
 };
 
 const $ = id => document.getElementById(id);
@@ -335,23 +368,36 @@ const truthy = v => v===true || v==="True" || v==="true";
 /* ---------- load ---------- */
 let chart = null;
 async function load(){
-  const [eqT, trT, ouT, deT] = await Promise.all([
-    getText(FILES.equity), getText(FILES.trades), getText(FILES.outcomes), getText(FILES.decisions)
+  const [eqT, trT, ouT, deT, sgT, chT, bmT] = await Promise.all([
+    getText(FILES.equity), getText(FILES.trades), getText(FILES.outcomes), getText(FILES.decisions),
+    getText(FILES.shadow), getText(FILES.challenger), getText(FILES.benchmark)
   ]);
   const equity = parseCSV(eqT);
   const trades = parseCSV(trT).filter(r=>r && r.symbol);
   const outcomes = parseCSV(ouT).filter(r=>r && r.symbol);
   const raw = parseJSONL(deT);
+  const shadowRaw = parseJSONL(sgT);
+  const challRaw = parseJSONL(chT);
+  const bench = parseCSV(bmT).filter(r=>r && r.spy_close);
 
   /* decisions: last entry per ET date */
   const byDate = new Map();
   for(const row of raw){ if(row.timestamp) byDate.set(etDate(row.timestamp), row); }
   const decisions = [...byDate.entries()].map(([date,row])=>({date,row})).sort((a,b)=>a.date<b.date?1:-1);
 
-  render(equity, trades, outcomes, decisions);
+  /* shadow gate: last entry per ET date */
+  const sgByDate = new Map();
+  for(const row of shadowRaw){ if(row.timestamp) sgByDate.set(etDate(row.timestamp), row); }
+  const shadow = [...sgByDate.entries()].map(([date,row])=>({date,row})).sort((a,b)=>a.date<b.date?1:-1);
+
+  /* challenger: last entry per ET date */
+  const chByDate = new Map();
+  for(const row of challRaw){ if(row.timestamp) chByDate.set(etDate(row.timestamp), row); }
+
+  render(equity, trades, outcomes, decisions, shadow, chByDate, bench);
 }
 
-function render(equity, trades, outcomes, decisions){
+function render(equity, trades, outcomes, decisions, shadow, chByDate, bench){
   $("loading").style.display = "none";
   $("app").style.display = "block";
 
@@ -407,27 +453,84 @@ function render(equity, trades, outcomes, decisions){
     || decisions.reduce((n,d)=>n+((d.row.decision?.rejected||[]).length),0);
   $("kRej").textContent = rejCount;
 
-  /* ---------- equity chart ---------- */
+  /* ---------- equity chart: v1 live vs v2 shadow vs SPY ---------- */
   const labels = equity.length ? equity.map(r=>r.date) : [new Date().toISOString().slice(0,10)];
   const values = equity.length ? equity.map(r=>Number(r.equity)) : [BASELINE];
+
+  /* v2 counterfactual: trades skipped if gate WOULD_VETO or challenger REJECT.
+     Replays v1's actual fills minus the P&L of skipped trades. */
+  const skip = new Set();
+  for(const {date,row} of shadow){
+    for(const e of (row.evaluated||[])) if(e.verdict==="WOULD_VETO") skip.add(date+"|"+e.symbol);
+  }
+  for(const [date,row] of chByDate){
+    for(const r of (row.reviews||[])) if(r.verdict==="REJECT") skip.add(date+"|"+r.symbol);
+  }
+  const posSize = new Map();
+  for(const t of trades){ if(!truthy(t.skipped)) posSize.set(t.date+"|"+t.symbol, Number(t.qty)*Number(t.ref_price)); }
+  const skippedPnlByDate = new Map();
+  for(const o of outcomes){
+    if(o.action!=="TAKEN") continue;
+    const key = o.date+"|"+o.symbol;
+    if(!skip.has(key)) continue;
+    const sz = posSize.get(key), pct = Number(o.realized_pnl_pct);
+    if(!sz || !isFinite(pct)) continue;
+    skippedPnlByDate.set(o.date, (skippedPnlByDate.get(o.date)||0) + sz*pct/100);
+  }
+  let cumSkipped = 0;
+  const v2values = equity.map(r=>{
+    cumSkipped += (skippedPnlByDate.get(r.date)||0);
+    return Number(r.equity) - cumSkipped;
+  });
+  window.__v2spread = equity.length ? (v2values[v2values.length-1] - values[values.length-1]) : 0;
+
+  /* SPY normalized to the baseline at its first logged close */
+  const spyBy = new Map(bench.map(r=>[r.date, Number(r.spy_close)]));
+  const spy0 = bench.length ? Number(bench[0].spy_close) : null;
+  let lastSpy = spy0;
+  const spyValues = labels.map(d=>{
+    if(spyBy.has(d)) lastSpy = spyBy.get(d);
+    return (spy0 && lastSpy) ? BASELINE*lastSpy/spy0 : null;
+  });
+
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   if(chart) chart.destroy();
   const ctx = $("equityChart").getContext("2d");
   const grad = ctx.createLinearGradient(0,0,0,300);
   grad.addColorStop(0,"rgba(232,176,75,.22)"); grad.addColorStop(1,"rgba(232,176,75,0)");
+  const datasets = [{
+    label:"Claude v1 (live)",
+    data:values, borderColor:"#E8B04B", backgroundColor:grad, fill:true,
+    borderWidth:2, pointRadius:values.length<40?3:0, pointBackgroundColor:"#E8B04B", tension:.25
+  }];
+  if(skip.size){
+    datasets.push({
+      label:"Claude v2 (shadow)",
+      data:v2values, borderColor:"#5AC8E8", borderDash:[5,4], fill:false,
+      borderWidth:1.5, pointRadius:0, tension:.25
+    });
+  }
+  if(bench.length){
+    datasets.push({
+      label:"SPY",
+      data:spyValues, borderColor:"rgba(139,147,161,.7)", fill:false,
+      borderWidth:1.5, pointRadius:0, tension:.25, spanGaps:true
+    });
+  }
   chart = new Chart(ctx,{
     type:"line",
-    data:{labels, datasets:[{
-      data:values, borderColor:"#E8B04B", backgroundColor:grad, fill:true,
-      borderWidth:2, pointRadius:values.length<40?3:0, pointBackgroundColor:"#E8B04B", tension:.25
-    }]},
+    data:{labels, datasets},
     options:{
       animation: reduce?false:{duration:700},
       responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{display:false}, tooltip:{
+      plugins:{
+        legend:{display:datasets.length>1, position:"top", align:"end",
+          labels:{color:"#8B93A1", boxWidth:14, boxHeight:2,
+                  font:{family:"IBM Plex Mono",size:10.5}}},
+        tooltip:{
         backgroundColor:"#161A21", borderColor:"#2A313C", borderWidth:1, titleColor:"#8B93A1", bodyColor:"#E8EAED",
         titleFont:{family:"IBM Plex Mono",size:11}, bodyFont:{family:"IBM Plex Mono",size:12},
-        callbacks:{label:c=>fmt$2(c.parsed.y)}
+        callbacks:{label:c=>(c.dataset.label?c.dataset.label+": ":"")+fmt$2(c.parsed.y)}
       }},
       scales:{
         x:{grid:{color:"#1E232B"}, ticks:{color:"#5A6270", font:{family:"IBM Plex Mono",size:10.5}, maxTicksLimit:9}},
@@ -528,22 +631,77 @@ function render(equity, trades, outcomes, decisions){
 
   /* ---------- decision wire ---------- */
   if(decisions.length){
-    $("feed").innerHTML = decisions.map(({date,row})=>{
+    $("feed").innerHTML = decisions.map(({date,row},i)=>{
       const dec = row.decision||{};
       const trades = dec.trades||[], rejected = dec.rejected||[];
       const badge = trades.length
         ? `<span class="badge yes">${trades.length} trade${trades.length>1?"s":""}</span>`
         : `<span class="badge no">no trade</span>`;
       const rej = rejected.map(r=>`<div class="rej"><span class="t">${r.symbol}</span> — <span class="r">${r.reason||""}</span></div>`).join("");
-      return `<div class="day">
-        <div class="day-h"><span class="d">${prettyDate(date)}</span>${badge}<span class="m">${(row.candidates_sent||[]).length} candidates screened</span></div>
-        ${dec.market_note?`<div class="day-note">${dec.market_note}</div>`:""}
-        ${rej}
+      const open = i===0 ? " open" : "";
+      return `<div class="day${open}">
+        <div class="day-h" role="button" tabindex="0" aria-expanded="${i===0}" onclick="toggleDay(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDay(this)}">
+          <span class="d">${prettyDate(date)}</span>${badge}
+          <span class="m">${(row.candidates_sent||[]).length} candidates screened</span>
+          <span class="caret">${i===0?"▾":"▸"}</span>
+        </div>
+        <div class="day-b">
+          ${dec.market_note?`<div class="day-note">${dec.market_note}</div>`:""}
+          ${rej}
+        </div>
       </div>`;
     }).join("");
   } else {
     $("feed").innerHTML = `<div class="empty"><b>The wire is quiet</b>Verdicts appear here after each trading morning — including the days Claude declines everything.</div>`;
   }
+
+  /* ---------- shadow pipeline: gate + challenger -> v2 ---------- */
+  if(shadow && shadow.length){
+    $("shadowGate").innerHTML = shadow.map(({date,row})=>{
+      const ev = row.evaluated||[], s = row.summary||{};
+      const ch = chByDate.get(date);
+      const chBy = new Map((ch?.reviews||[]).map(r=>[r.symbol,r]));
+      let badge;
+      if(!ev.length) badge = `<span class="badge no">idle</span>`;
+      else {
+        const skips = ev.filter(t=>t.verdict==="WOULD_VETO" || chBy.get(t.symbol)?.verdict==="REJECT").length;
+        badge = skips ? `<span class="badge veto">v2 skips ${skips}</span>` : `<span class="badge clear">v2 takes all</span>`;
+      }
+      const body = ev.map(t=>{
+        const rev = chBy.get(t.symbol);
+        const gateB = t.verdict==="WOULD_VETO" ? `<span class="badge veto">gate: veto</span>`
+                  : t.verdict==="FLAGGED" ? `<span class="badge flag">gate: flag</span>`
+                  : `<span class="badge clear">gate: allow</span>`;
+        const chB = !rev ? "" : rev.verdict==="REJECT" ? `<span class="badge veto">challenger: reject</span>`
+                  : rev.verdict==="CONFIRM" ? `<span class="badge clear">challenger: confirm</span>`
+                  : `<span class="badge no">challenger: n/a</span>`;
+        const skipped = t.verdict==="WOULD_VETO" || rev?.verdict==="REJECT";
+        const v2B = skipped ? `<span class="badge veto">v2: skip</span>` : `<span class="badge clear">v2: take</span>`;
+        const flags = (t.flags||[]).map(f=>
+          `<div class="sg-flag${f.level==='veto'?' v':''}"><span class="rule">${f.rule}</span> — ${f.detail}</div>`
+        ).join("");
+        const bear = rev && rev.bear_case && rev.verdict!=="ERROR"
+          ? `<div class="sg-flag${rev.verdict==='REJECT'?' v':''}"><span class="rule">BEAR CASE</span> — ${rev.bear_case}</div>` : "";
+        return `<div class="sg-trade"><span class="t">${t.symbol}</span> ${gateB} ${chB} ${v2B}${flags}${bear}</div>`;
+      }).join("");
+      return `<div class="sg-day">
+        <div class="sg-h"><span class="d">${prettyDate(date)}</span>${badge}<span class="m">${ev.length?ev.length+" trade(s) scored":"no trades proposed"}</span></div>
+        ${body}
+      </div>`;
+    }).join("");
+    const spread = window.__v2spread||0;
+    if(Math.abs(spread) >= 1){
+      $("sgHint").textContent = `v2 shadow ${spread>0?"+":"−"}${fmt$(Math.abs(spread)).replace("$","$")} vs live · observes only`;
+      $("sgHint").style.color = spread>0 ? "var(--green)" : "var(--red)";
+    }
+  }
+}
+
+function toggleDay(h){
+  const day = h.closest(".day");
+  const open = day.classList.toggle("open");
+  h.setAttribute("aria-expanded", open);
+  h.querySelector(".caret").textContent = open ? "▾" : "▸";
 }
 
 function toggleWhy(row){
