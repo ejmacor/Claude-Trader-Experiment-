@@ -240,6 +240,15 @@ footer .sep{color:var(--line-strong)}
       <div class="kpi"><div class="k">Rejections logged</div><div class="v" id="kRej">—</div><div class="s">counterfactuals tracked</div></div>
     </section>
 
+    <section class="kpis" aria-label="Performance analytics" style="margin-top:-12px">
+      <div class="kpi"><div class="k">Expectancy</div><div class="v" id="kExp">—</div><div class="s">avg %/closed trade</div></div>
+      <div class="kpi"><div class="k">Profit factor</div><div class="v" id="kPF">—</div><div class="s">gross wins / gross losses</div></div>
+      <div class="kpi"><div class="k">Max drawdown</div><div class="v" id="kDD">—</div><div class="s">peak-to-trough equity</div></div>
+      <div class="kpi"><div class="k">Avg win</div><div class="v" id="kAvgW">—</div><div class="s" id="kAvgWSub"></div></div>
+      <div class="kpi"><div class="k">Avg loss</div><div class="v" id="kAvgL">—</div><div class="s" id="kAvgLSub"></div></div>
+      <div class="kpi"><div class="k">Regime</div><div class="v" id="kRegime" style="font-size:15px">—</div><div class="s" id="kRegimeSub"></div></div>
+    </section>
+
     <!-- equity + judgment -->
     <div class="grid two">
       <section class="panel">
@@ -330,7 +339,7 @@ window.addEventListener("error", e=>{
   }
 });
 /* ---------- config ---------- */
-const START = new Date("2026-07-03T00:00:00-04:00");
+const START = new Date("2026-07-06T00:00:00-04:00"); /* v2 engine day 1 */
 const DAYS = 90, BASELINE = 100000;
 const FILES = {
   equity: "logs/equity_curve.csv",
@@ -340,6 +349,8 @@ const FILES = {
   shadow: "logs/shadow_gate.jsonl",
   challenger: "logs/challenger.jsonl",
   benchmark: "logs/benchmark.csv",
+  regime: "logs/regime.jsonl",
+  midday: "logs/midday.jsonl",
 };
 
 const $ = id => document.getElementById(id);
@@ -371,10 +382,13 @@ const truthy = v => v===true || v==="True" || v==="true";
 /* ---------- load ---------- */
 let chart = null;
 async function load(){
-  const [eqT, trT, ouT, deT, sgT, chT, bmT] = await Promise.all([
+  const [eqT, trT, ouT, deT, sgT, chT, bmT, rgT, mdT] = await Promise.all([
     getText(FILES.equity), getText(FILES.trades), getText(FILES.outcomes), getText(FILES.decisions),
-    getText(FILES.shadow), getText(FILES.challenger), getText(FILES.benchmark)
+    getText(FILES.shadow), getText(FILES.challenger), getText(FILES.benchmark),
+    getText(FILES.regime), getText(FILES.midday)
   ]);
+  const regimeRows = parseJSONL(rgT);
+  const middayRows = parseJSONL(mdT);
   const equity = parseCSV(eqT);
   const trades = parseCSV(trT).filter(r=>r && r.symbol);
   const outcomes = parseCSV(ouT).filter(r=>r && r.symbol);
@@ -397,10 +411,10 @@ async function load(){
   const chByDate = new Map();
   for(const row of challRaw){ if(row.timestamp) chByDate.set(etDate(row.timestamp), row); }
 
-  render(equity, trades, outcomes, decisions, shadow, chByDate, bench);
+  render(equity, trades, outcomes, decisions, shadow, chByDate, bench, regimeRows, middayRows);
 }
 
-function render(equity, trades, outcomes, decisions, shadow, chByDate, bench){
+function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, regimeRows, middayRows){
   $("loading").style.display = "none";
   $("app").style.display = "block";
 
@@ -440,14 +454,14 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench){
   $("kPnl").textContent = fmt$(pnl); $("kPnl").className = "v "+cls(pnl);
   $("kPnlSub").textContent = pct(pnlPct); $("kPnlSub").className = "s "+cls(pnl);
 
-  const closed = outcomes.filter(o=>o.action==="TAKEN" && o.realized_pnl_pct!=="" && o.realized_pnl_pct!=null);
+  const closed = outcomes.filter(o=>(o.action==="TAKEN"||o.action==="SWING_CLOSED") && o.realized_pnl_pct!=="" && o.realized_pnl_pct!=null);
   const wins = closed.filter(o=>Number(o.realized_pnl_pct)>0).length;
   $("kWin").textContent = closed.length ? Math.round(wins/closed.length*100)+"%" : "—";
   $("kWinSub").textContent = closed.length ? `${wins}W / ${closed.length-wins}L` : "no closed trades yet";
 
   const executed = trades.filter(t=>!truthy(t.skipped));
   $("kTrades").textContent = executed.length;
-  $("kTradesSub").textContent = executed.length ? "bracketed, day-only" : "capital fully preserved";
+  $("kTradesSub").textContent = executed.length ? "ATR brackets · day + swing" : "capital fully preserved";
 
   const noTradeDays = decisions.filter(d=>!(d.row.decision?.trades||[]).length).length;
   $("kNoTrade").textContent = noTradeDays;
@@ -455,6 +469,27 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench){
   const rejCount = outcomes.filter(o=>o.action==="REJECTED").length
     || decisions.reduce((n,d)=>n+((d.row.decision?.rejected||[]).length),0);
   $("kRej").textContent = rejCount;
+
+  /* ---------- v2 analytics KPIs ---------- */
+  const pnls = closed.map(o=>Number(o.realized_pnl_pct)).filter(n=>!isNaN(n));
+  const w = pnls.filter(p=>p>0), l = pnls.filter(p=>p<=0);
+  const exp = pnls.length ? pnls.reduce((a,b)=>a+b,0)/pnls.length : null;
+  $("kExp").textContent = exp==null ? "—" : pct(exp);
+  if(exp!=null) $("kExp").className = "v "+cls(exp);
+  const gw = w.reduce((a,b)=>a+b,0), gl = Math.abs(l.reduce((a,b)=>a+b,0));
+  $("kPF").textContent = (w.length&&gl) ? (gw/gl).toFixed(2) : (w.length&&!l.length ? "∞" : "—");
+  /* max drawdown from equity snapshots */
+  let peak=-Infinity, mdd=0;
+  for(const r of equity){ const e=Number(r.equity); if(e>peak) peak=e; if(peak>0) mdd=Math.max(mdd,(peak-e)/peak*100); }
+  $("kDD").textContent = equity.length ? "-"+mdd.toFixed(1)+"%" : "—";
+  if(equity.length) $("kDD").className = "v "+(mdd>0.01?"neg":"flat");
+  $("kAvgW").textContent = w.length ? pct(gw/w.length) : "—";
+  if(w.length){ $("kAvgW").className="v pos"; $("kAvgWSub").textContent = w.length+" winner"+(w.length>1?"s":""); }
+  $("kAvgL").textContent = l.length ? pct(-gl/l.length) : "—";
+  if(l.length){ $("kAvgL").className="v neg"; $("kAvgLSub").textContent = l.length+" loser"+(l.length>1?"s":""); }
+  const rg = regimeRows.length ? regimeRows[regimeRows.length-1] : null;
+  $("kRegime").textContent = rg ? rg.regime : "—";
+  $("kRegimeSub").textContent = rg ? ("risk ×"+rg.risk_mult+(rg.detail&&rg.detail.realized_vol_20d_pct?(" · vol "+rg.detail.realized_vol_20d_pct+"%"):"")) : "logged each morning run";
 
   /* ---------- equity chart: v1 live vs v2 shadow vs SPY ---------- */
   const labels = equity.length ? equity.map(r=>r.date) : [new Date().toISOString().slice(0,10)];

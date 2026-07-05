@@ -1,8 +1,8 @@
 """
-run_morning.py — The daily entry point. Run this at 8:30am ET each
-trading day (manually or via scheduler).
+run_morning.py — v2 daily entry point (8:30am ET via GitHub Actions).
 
-Pipeline: guards -> scan -> Claude analyzes -> bracket orders -> log.
+Pipeline: guards -> regime -> scan -> Claude analyzes -> risk gate (BLOCKING)
+          -> challenger (advisory) -> ATR bracket orders -> log.
 """
 
 import sys
@@ -14,17 +14,16 @@ import requests
 import analyst
 import benchmark
 import challenger
+import config
 import executor
+import regime as regime_mod
 import scanner
 import shadow_gate
 import trade_logger
 
 
 def already_ran_today():
-    """Duplicate-run guard: True if ANY order was already placed today (ET).
-
-    Protects against double-trading if the workflow runs twice in one
-    morning (scheduled run + manual trigger, or a re-run)."""
+    """Duplicate-run guard: True if ANY order was already placed today (ET)."""
     et_midnight = datetime.combine(
         datetime.now(ZoneInfo("America/New_York")).date(), time.min,
         tzinfo=ZoneInfo("America/New_York"),
@@ -36,91 +35,113 @@ def already_ran_today():
         timeout=30,
     )
     resp.raise_for_status()
-    return len(resp.json()) > 0
+    # GTC swing brackets from prior days shouldn't trip the guard — only orders SUBMITTED today count
+    today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    return any((o.get("submitted_at") or "").startswith(today) or
+               (o.get("created_at") or "")[:10] == today for o in resp.json())
 
 
 def main():
     print("=" * 60)
-    print("CLAUDE TRADER — morning run")
+    print(f"CLAUDE TRADER v{config.CONFIG_VERSION} — morning run")
     print("=" * 60)
 
-    # 0a. Duplicate-run guard — never trade twice in one day.
+    # 0a. Duplicate-run guard
     if already_ran_today():
-        print("Orders already exist for today — duplicate run detected.")
-        print("Exiting without trading. (This is the safety guard working.)")
+        print("Orders already submitted today — duplicate run detected. Exiting.")
         sys.exit(0)
 
-    # 0b. Risk guardrails — if halted, we don't even scan.
+    # 0b. Regime first — it feeds both guardrails and the analyst
+    print("\n[1/5] Classifying market regime...")
+    regime = regime_mod.classify()
+    print(f"      {regime['regime']} (risk x{regime['risk_mult']}) | {regime['detail']}")
+
+    # 0c. Risk guardrails
     account = executor.get_account()
-    ok, reason = executor.guardrails_pass(account)
+    ok, reason = executor.guardrails_pass(account, regime)
     trade_logger.log_equity(account)
     if not ok:
         print(f"HALTED, no trades today: {reason}")
         sys.exit(0)
 
     # 1. Scan
-    print("\n[1/4] Scanning pre-market gappers...")
+    print("\n[2/5] Scanning pre-market gappers...")
     candidates = scanner.build_candidates()
-    print(f"      {len(candidates)} candidates with news catalysts")
+    print(f"      {len(candidates)} candidates with catalysts")
     for c in candidates:
-        print(f"      {c['symbol']:6s} +{c['gap_pct']}%  |  {c['news'][0]['headline'][:70]}")
+        t = c["technicals"]
+        print(f"      {c['symbol']:6s} +{c['gap_pct']}% | rvol {t['relative_volume']} | atr {t['atr_pct']}% | {c['news'][0]['headline'][:60]}")
 
     # 2. Analyze
-    print("\n[2/4] Sending to Claude for catalyst analysis...")
-    decision = analyst.analyze(candidates)
-    trade_logger.log_decision(candidates, decision)
+    print("\n[3/5] Claude catalyst analysis...")
+    decision = analyst.analyze(candidates, regime)
     print(f"      Market note: {decision.get('market_note', '')}")
-    print(f"      Trades recommended: {len(decision['trades'])}")
+    print(f"      Trades proposed: {len(decision['trades'])}")
 
-    # 2b. Shadow risk gate — OBSERVES ONLY. Logs what it would veto/flag,
-    #     never alters the decision. Firewalled: a gate crash can't stop trading.
+    # 2b. Risk gate — BLOCKING in v2 (was shadow in v1)
     try:
         gate = shadow_gate.evaluate(
             candidates, decision,
             open_position_count=len(executor.get_open_positions()),
         )
+        vetoed = {e["symbol"] for e in gate["evaluated"] if e["verdict"] == "WOULD_VETO"}
+        if config.GATE_BLOCKING and vetoed:
+            kept = [t for t in decision["trades"] if t["symbol"] not in vetoed]
+            for sym in vetoed:
+                flags = next((e["flags"] for e in gate["evaluated"] if e["symbol"] == sym), [])
+                reason = "; ".join(f["detail"] for f in flags if f["level"] == "veto")
+                decision.setdefault("rejected", []).append({"symbol": sym, "reason": f"GATE VETO: {reason}"})
+                print(f"      GATE VETO {sym}: {reason}")
+            decision["trades"] = kept
         s = gate["summary"]
-        print(f"      Shadow gate: {s['would_allow']} allow / {s['flagged']} flagged / {s['would_veto']} would-veto (advisory only)")
-    except Exception as e:  # noqa: BLE001
-        print(f"      Shadow gate error (ignored, live run unaffected): {e}")
+        print(f"      Gate ({'BLOCKING' if config.GATE_BLOCKING else 'shadow'}): "
+              f"{s['would_allow']} allow / {s['flagged']} flagged / {s['would_veto']} vetoed")
+    except Exception as e:  # noqa: BLE001 — gate crash must never stop the run
+        print(f"      Gate error (ignored): {e}")
 
-    # 2c. Shadow challenger — second Claude call plays risk officer and
-    #     confirms/rejects each proposal. Logged only; forms the v2 track.
+    trade_logger.log_decision(candidates, decision)
+
+    # 2c. Challenger — second Claude call as risk officer (advisory)
     try:
         chall = challenger.review(candidates, decision)
         verdicts = {r["symbol"]: r["verdict"] for r in chall.get("reviews", [])}
         if verdicts:
-            print("      Challenger:", ", ".join(f"{k}={v}" for k, v in verdicts.items()), "(advisory only)")
+            print("      Challenger:", ", ".join(f"{k}={v}" for k, v in verdicts.items()), "(advisory)")
     except Exception as e:  # noqa: BLE001
-        print(f"      Challenger error (ignored, live run unaffected): {e}")
+        print(f"      Challenger error (ignored): {e}")
 
-    # 2d. Benchmark — log SPY close for the dashboard's market-comparison line.
+    # 2d. Benchmark
     try:
         benchmark.log_spy()
     except Exception as e:  # noqa: BLE001
         print(f"      Benchmark log error (ignored): {e}")
 
     # 3. Execute
-    print("\n[3/4] Placing bracket orders (PAPER)...")
-    price_by_symbol = {c["symbol"]: c["last_price"] for c in candidates}
+    print("\n[4/5] Placing ATR bracket orders (PAPER)...")
+    by_symbol = {c["symbol"]: c for c in candidates}
     for trade in decision["trades"]:
         sym = trade["symbol"]
-        ref_price = price_by_symbol.get(sym)
-        if ref_price is None:
+        cand = by_symbol.get(sym)
+        if cand is None:
             execution = {"skipped": True, "reason": "symbol not in candidate list (hallucination guard)"}
         else:
             try:
-                execution = executor.place_bracket(sym, ref_price)
+                execution = executor.place_bracket(
+                    sym, cand["last_price"],
+                    atr=cand["technicals"].get("atr"),
+                    module=trade.get("module", "DAY_MOMENTUM"),
+                    regime_mult=regime["risk_mult"],
+                )
             except Exception as e:  # noqa: BLE001
                 execution = {"skipped": True, "reason": f"order error: {e}"}
         trade_logger.log_trade(trade, execution)
-        status = "SKIPPED: " + execution.get("reason", "") if execution.get("skipped") else \
-            f"BUY {execution['qty']} @ ~{execution['ref_price']} | stop {execution['stop']} | target {execution['target']}"
-        print(f"      {sym:6s} conviction {trade.get('conviction')}/10 -> {status}")
+        status = ("SKIPPED: " + execution.get("reason", "")) if execution.get("skipped") else \
+            (f"BUY {execution['qty']} @ ~{execution['ref_price']} | stop {execution['stop']} | "
+             f"target {execution['target']} | {execution['module']} ({execution['time_in_force']})"
+             + ("" if execution.get("verified") else " | UNVERIFIED"))
+        print(f"      {sym:6s} score {trade.get('setup_score')}/10 -> {status}")
 
-    # 4. Done
-    print("\n[4/4] Run complete. Decisions logged to logs/.")
-    print("      Brackets manage exits. TIF=day flattens by close.")
+    print("\n[5/5] Run complete. Day brackets flatten at close; swing brackets persist (GTC).")
 
 
 if __name__ == "__main__":

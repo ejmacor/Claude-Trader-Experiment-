@@ -94,6 +94,13 @@ def get_todays_fills():
     return result
 
 
+def open_position_symbols():
+    try:
+        return {p["symbol"] for p in executor.get_open_positions()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def main():
     decision_row = load_todays_decision()
     if decision_row is None:
@@ -115,18 +122,32 @@ def main():
         if not file_exists:
             w.writeheader()
 
+        still_open = open_position_symbols()
+
+        # v2: swing positions closed today from PRIOR days' decisions — record
+        # their realized round trips (today's decision won't contain them).
+        for sym, pnl in fills.items():
+            if sym not in taken and sym not in still_open:
+                w.writerow({
+                    "date": today_et(), "symbol": sym, "action": "SWING_CLOSED",
+                    "conviction": "", "catalyst_type": "", "reject_reason": "",
+                    "open_to_close_pct": "", "realized_pnl_pct": pnl,
+                })
+                print(f"SWING_CLOSED {sym:6s} realized {pnl}%")
+
         for sym, t in taken.items():
             o, c = get_open_close(sym)
             oc = round((c - o) / o * 100, 2) if o and c else ""
+            action = "OPEN_SWING" if sym in still_open else "TAKEN"
             w.writerow({
-                "date": today_et(), "symbol": sym, "action": "TAKEN",
+                "date": today_et(), "symbol": sym, "action": action,
                 "conviction": t.get("conviction", ""),
                 "catalyst_type": t.get("catalyst_type", ""),
                 "reject_reason": "",
                 "open_to_close_pct": oc,
                 "realized_pnl_pct": fills.get(sym, ""),
             })
-            print(f"TAKEN    {sym:6s} open->close {oc}%  realized {fills.get(sym, 'n/a')}%")
+            print(f"{action:9s}{sym:6s} open->close {oc}%  realized {fills.get(sym, chr(39)+chr(110)+chr(47)+chr(97)+chr(39))}%")
 
         for sym, r in rejected.items():
             o, c = get_open_close(sym)

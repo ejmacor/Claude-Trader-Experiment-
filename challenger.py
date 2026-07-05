@@ -83,7 +83,7 @@ def review(candidates, decision):
         resp = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=1500,
-            system=SYSTEM_PROMPT.format(stop=config.STOP_LOSS_PCT, target=config.TAKE_PROFIT_PCT),
+            system=SYSTEM_PROMPT.format(stop=config.STOP_PCT_CEIL, target=config.STOP_PCT_CEIL * config.TARGET_ATR_MULT / config.STOP_ATR_MULT),
             messages=[{"role": "user", "content":
                        "Challenge these proposed trades:\n\n" + json.dumps(payload, indent=2)}],
         )
