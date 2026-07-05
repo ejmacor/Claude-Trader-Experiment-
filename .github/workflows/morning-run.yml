@@ -123,3 +123,20 @@ jobs:
           urllib.request.urlopen(req, timeout=30)
           print("Notification sent.")
           EOF
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF2'
+          import os, urllib.request
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              raise SystemExit(0)
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=b"MORNING RUN FAILED - check GitHub Actions logs. No trades may have been placed today.",
+              headers={"Title": "Claude Trader: FAILURE", "Tags": "rotating_light", "Priority": "high"})
+          urllib.request.urlopen(req, timeout=30)
+          EOF2

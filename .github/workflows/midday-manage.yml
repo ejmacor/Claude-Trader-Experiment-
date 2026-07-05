@@ -1,0 +1,88 @@
+name: Midday Position Management
+
+on:
+  schedule:
+    # 16:40 UTC = 12:40pm ET during EDT. Actions cron can lag, so this
+    # lands roughly 12:40-1:00pm ET — squarely midday.
+    # NOTE: When clocks change to EST in November, update to '40 17 * * 1-5'.
+    - cron: '40 16 * * 1-5'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: midday-manage
+  cancel-in-progress: false
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+
+      - name: Skip if US market holiday
+        id: holiday
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, requests, datetime
+          headers = {
+              "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+              "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
+          }
+          today = datetime.date.today().isoformat()
+          r = requests.get(
+              "https://paper-api.alpaca.markets/v2/calendar",
+              headers=headers, params={"start": today, "end": today}, timeout=30)
+          r.raise_for_status()
+          is_open = bool(r.json())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"market_open={'true' if is_open else 'false'}\n")
+          print("Market open today:", is_open)
+          EOF
+
+      - name: Run midday manager
+        if: steps.holiday.outputs.market_open == 'true'
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run_midday.py | tee midday_out.txt
+
+      - name: Commit logs
+        if: steps.holiday.outputs.market_open == 'true'
+        run: |
+          git config user.name "claude-trader-bot"
+          git config user.email "actions@github.com"
+          git pull --rebase || true
+          git add logs/ || true
+          git diff --cached --quiet || git commit -m "logs: midday session $(date -u +%F)"
+          git push
+
+      - name: Notify phone
+        if: always() && steps.holiday.outputs.market_open == 'true'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, urllib.request
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              raise SystemExit(0)
+          try:
+              msg = open("midday_out.txt").read().strip()[:800] or "Midday session ran."
+          except FileNotFoundError:
+              msg = "Midday session FAILED before producing output — check Actions."
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}", data=msg.encode(),
+              headers={"Title": "Claude Trader: midday manager", "Tags": "scales"})
+          urllib.request.urlopen(req, timeout=30)
+          EOF
