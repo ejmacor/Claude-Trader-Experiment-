@@ -2,11 +2,15 @@ name: Morning Trading Run
 
 on:
   schedule:
-    # GitHub cron is UTC. 12:10 UTC = 8:10am ET during EDT (summer).
-    # Actions cron can lag 5-15 min at busy times, so we schedule early
-    # to make sure we're done well before the 9:30 ET open.
-    # NOTE: When clocks change to EST in November, update to '10 13 * * 1-5'.
+    # GitHub cron is UTC. Two slots for redundancy — Actions crons are
+    # best-effort and can be skipped/delayed, so we fire a primary at
+    # 12:10 UTC (8:10am ET during EDT) and a backup at 12:25 UTC (8:25am ET).
+    # The "Skip if already ran today" step below makes the backup a no-op
+    # whenever the primary succeeded.
+    # NOTE: When clocks change to EST in November, update to
+    # '10 13 * * 1-5' and '25 13 * * 1-5'.
     - cron: '10 12 * * 1-5'
+    - cron: '25 12 * * 1-5'
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 permissions:
@@ -32,8 +36,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Skip if already ran today
+        id: dedupe
+        run: |
+          python - <<'EOF'
+          import json, os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+          ran = False
+          try:
+              with open("logs/decisions.jsonl") as f:
+                  for line in f:
+                      try:
+                          row = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      d = datetime.fromisoformat(row["timestamp"]).astimezone(
+                          ZoneInfo("America/New_York")).date().isoformat()
+                      if d == today:
+                          ran = True
+          except FileNotFoundError:
+              pass
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"already_ran={'true' if ran else 'false'}\n")
+          print("Already ran today:", ran)
+          EOF
+
       - name: Skip if US market holiday
         id: holiday
+        if: steps.dedupe.outputs.already_ran == 'false'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -56,7 +88,7 @@ jobs:
           EOF
 
       - name: Run morning pipeline
-        if: steps.holiday.outputs.market_open == 'true'
+        if: steps.dedupe.outputs.already_ran == 'false' && steps.holiday.outputs.market_open == 'true'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -64,7 +96,7 @@ jobs:
         run: python run_morning.py
 
       - name: Commit logs back to repo
-        if: steps.holiday.outputs.market_open == 'true'
+        if: steps.dedupe.outputs.already_ran == 'false' && steps.holiday.outputs.market_open == 'true'
         run: |
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
@@ -73,7 +105,7 @@ jobs:
           git push
 
       - name: Push notification to phone
-        if: always() && steps.holiday.outputs.market_open == 'true'
+        if: always() && steps.dedupe.outputs.already_ran == 'false' && steps.holiday.outputs.market_open == 'true'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
