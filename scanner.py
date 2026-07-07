@@ -119,32 +119,59 @@ def build_candidates():
     movers = get_movers()
     candidates, rejected_by_filter = [], []
 
+    # ---- Funnel instrumentation (observability only — no filter changes) ----
+    funnel = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "movers_returned": len(movers),
+        "top_movers_raw": [
+            {"symbol": m.get("symbol"), "pct": round(m.get("percent_change", 0), 2),
+             "price": m.get("price", 0)}
+            for m in movers[:8]
+        ],
+        "passed_gap_and_price": 0,
+        "failed_bars_fetch": 0,
+        "rejected_insufficient_history": 0,
+        "rejected_illiquid": 0,
+        "rejected_extended": 0,
+        "failed_news_fetch": 0,
+        "rejected_no_news": 0,
+        "final_candidates": 0,
+    }
+
     for m in movers:
         sym, pct, price = m["symbol"], m.get("percent_change", 0), m.get("price", 0)
         if pct < config.MIN_GAP_PCT or not (config.MIN_PRICE <= price <= config.MAX_PRICE):
             continue
+        funnel["passed_gap_and_price"] += 1
         try:
             bars = get_daily_bars(sym)
             tech = technicals(bars, price)
         except Exception as e:  # noqa: BLE001
             print(f"      WARN: bars failed for {sym}, skipping ({e})")
+            funnel["failed_bars_fetch"] += 1
             continue
         if tech is None:
             rejected_by_filter.append((sym, "insufficient history"))
+            funnel["rejected_insufficient_history"] += 1
             continue
         if tech["avg_dollar_volume"] < config.MIN_AVG_DOLLAR_VOLUME:
             rejected_by_filter.append((sym, f"illiquid: ${tech['avg_dollar_volume']:,}/day"))
+            funnel["rejected_illiquid"] += 1
             continue
         if tech["extension_vs_20d_high_pct"] > config.MAX_EXTENSION_FROM_20D_HIGH:
             rejected_by_filter.append((sym, f"already +{tech['extension_vs_20d_high_pct']}% extended"))
+            funnel["rejected_extended"] += 1
             continue
 
         try:
             news = get_news(sym)
         except Exception as e:  # noqa: BLE001
             print(f"      WARN: news failed for {sym}, skipping ({e})")
+            funnel["failed_news_fetch"] += 1
             continue
         if not news:
+            rejected_by_filter.append((sym, "no news catalyst"))
+            funnel["rejected_no_news"] += 1
             continue  # no catalyst = not our strategy
 
         candidates.append({
@@ -162,6 +189,24 @@ def build_candidates():
 
     if rejected_by_filter:
         print("      Filtered pre-Claude: " + "; ".join(f"{s} ({r})" for s, r in rejected_by_filter[:8]))
+
+    # ---- Write funnel record ----
+    funnel["final_candidates"] = len(candidates)
+    funnel["rejects_detail"] = [f"{s}: {r}" for s, r in rejected_by_filter[:12]]
+    try:
+        import json as _json
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/funnel.jsonl", "a") as f:
+            f.write(_json.dumps(funnel) + "\n")
+    except Exception as e:  # noqa: BLE001
+        print(f"      WARN: funnel log write failed ({e})")
+    print(
+        f"      FUNNEL: movers={funnel['movers_returned']} -> "
+        f"gap/price={funnel['passed_gap_and_price']} -> "
+        f"liquid={funnel['passed_gap_and_price'] - funnel['rejected_insufficient_history'] - funnel['rejected_illiquid'] - funnel['failed_bars_fetch']} -> "
+        f"not-extended={funnel['passed_gap_and_price'] - funnel['rejected_insufficient_history'] - funnel['rejected_illiquid'] - funnel['failed_bars_fetch'] - funnel['rejected_extended']} -> "
+        f"with-news={funnel['final_candidates']}"
+    )
     return candidates
 
 
