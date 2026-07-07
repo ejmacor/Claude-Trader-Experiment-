@@ -1,2 +1,3 @@
 {"timestamp": "2026-07-06T13:30:16.931677+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 744.86, "sma50": 737.38, "sma200": 692.26, "realized_vol_20d_pct": 17.7}}
 {"timestamp": "2026-07-06T17:20:33.574978+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 751.09, "sma50": 738.18, "sma200": 692.72, "realized_vol_20d_pct": 18.0}}
+{"timestamp": "2026-07-07T12:17:37.504969+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 751.27, "sma50": 738.18, "sma200": 692.72, "realized_vol_20d_pct": 18.0}}
