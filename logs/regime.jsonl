@@ -2,3 +2,4 @@
 {"timestamp": "2026-07-06T17:20:33.574978+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 751.09, "sma50": 738.18, "sma200": 692.72, "realized_vol_20d_pct": 18.0}}
 {"timestamp": "2026-07-07T12:17:37.504969+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 751.27, "sma50": 738.18, "sma200": 692.72, "realized_vol_20d_pct": 18.0}}
 {"timestamp": "2026-07-08T17:14:11.342529+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 744.57, "sma50": 739.58, "sma200": 693.57, "realized_vol_20d_pct": 15.4}}
+{"timestamp": "2026-07-09T18:31:44.371722+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 751.4, "sma50": 740.32, "sma200": 694.01, "realized_vol_20d_pct": 15.5}}
