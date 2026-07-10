@@ -64,7 +64,11 @@ def get_open_close(symbol):
 
 def get_todays_fills():
     """Map symbol -> realized round-trip P&L pct from today's filled orders."""
-    et_start = f"{today_et()}T00:00:00-04:00"
+    et_start = datetime.combine(
+        datetime.now(ZoneInfo("America/New_York")).date(),
+        datetime.min.time(),
+        tzinfo=ZoneInfo("America/New_York"),
+    ).isoformat()  # correct offset year-round; was hardcoded -04:00 (breaks under EST)
     resp = requests.get(
         f"{executor.BASE_URL}/v2/orders",
         headers=executor.HEADERS,
@@ -101,7 +105,91 @@ def open_position_symbols():
         return set()
 
 
+def detect_swing_closes(still_open, seen):
+    """Realized P&L for multi-day swings that closed, via their own bracket
+    order legs. Same-day fill matching can never catch these: the buy fill
+    is from a prior day, so today's orders only show the sell side.
+    Returns {symbol: realized_pnl_pct}."""
+    closes = {}
+    if not os.path.exists("logs/trade_log.csv"):
+        return closes
+    with open("logs/trade_log.csv", newline="") as f:
+        for r in csv.DictReader(f):
+            sym = r.get("symbol", "")
+            if r.get("skipped") in ("True", "true") or not r.get("order_id"):
+                continue
+            if r.get("time_in_force") != "gtc" and r.get("module") != "SWING_CATALYST":
+                continue
+            if sym in still_open:
+                continue  # still holding — nothing realized yet
+            if any(s == sym and a == "SWING_CLOSED" for (_, s, a) in seen):
+                continue  # already recorded
+            try:
+                parent = requests.get(
+                    f"{executor.BASE_URL}/v2/orders/{r['order_id']}",
+                    headers=executor.HEADERS, params={"nested": "true"}, timeout=30,
+                ).json()
+                buy_px = float(parent.get("filled_avg_price") or 0)
+                sell_px = 0.0
+                for leg in parent.get("legs") or []:
+                    if leg.get("side") == "sell" and leg.get("filled_avg_price"):
+                        sell_px = float(leg["filled_avg_price"])
+                # Fallback: EOD flatten / midday close CANCELS the bracket legs
+                # and exits via a separate market sell — find that fill instead.
+                if buy_px and not sell_px:
+                    closed_orders = requests.get(
+                        f"{executor.BASE_URL}/v2/orders",
+                        headers=executor.HEADERS,
+                        params={"status": "closed", "symbols": sym,
+                                "after": f"{r.get('date','')}T00:00:00-05:00",
+                                "limit": 100, "direction": "desc"},
+                        timeout=30,
+                    ).json()
+                    qty_needed = float(r.get("qty") or 0)
+                    sold_val = sold_qty = 0.0
+                    for o in closed_orders:
+                        if o.get("side") == "sell" and o.get("filled_avg_price"):
+                            q = float(o.get("filled_qty") or 0)
+                            sold_val += float(o["filled_avg_price"]) * q
+                            sold_qty += q
+                    if sold_qty and (not qty_needed or sold_qty >= qty_needed):
+                        sell_px = sold_val / sold_qty
+                if buy_px and sell_px:
+                    closes[sym] = round((sell_px - buy_px) / buy_px * 100, 2)
+            except Exception as e:  # noqa: BLE001
+                print(f"swing close lookup failed for {sym}: {e}")
+    return closes
+
+
+def already_recorded():
+    """(date, symbol, action) triples already in outcomes.csv — makes reruns
+    (backup crons, manual dispatches) append-safe instead of duplicating."""
+    seen = set()
+    if os.path.exists(OUTCOMES_CSV):
+        with open(OUTCOMES_CSV, newline="") as f:
+            for r in csv.DictReader(f):
+                seen.add((r.get("date"), r.get("symbol"), r.get("action")))
+    return seen
+
+
+def safe_open_close(symbol):
+    """One bad ticker's data request must never kill the whole recorder."""
+    try:
+        return get_open_close(symbol)
+    except Exception as e:  # noqa: BLE001
+        print(f"open/close fetch failed for {symbol} (skipping pct): {e}")
+        return None, None
+
+
 def main():
+    # Evening equity snapshot — replaces today's morning row with the
+    # post-close reading so the dashboard matches the Alpaca account.
+    try:
+        import trade_logger
+        trade_logger.log_equity(executor.get_account())
+    except Exception as e:  # noqa: BLE001
+        print(f"Equity snapshot failed (ignored): {e}")
+
     decision_row = load_todays_decision()
     if decision_row is None:
         print("No decision logged for today; nothing to record.")
@@ -111,6 +199,7 @@ def main():
     taken = {t["symbol"]: t for t in decision.get("trades", [])}
     rejected = {r["symbol"]: r for r in decision.get("rejected", [])}
     fills = get_todays_fills()
+    seen = already_recorded()
 
     file_exists = os.path.exists(OUTCOMES_CSV)
     os.makedirs("logs", exist_ok=True)
@@ -123,11 +212,13 @@ def main():
             w.writeheader()
 
         still_open = open_position_symbols()
+        fills = {**detect_swing_closes(still_open, seen), **fills}
 
         # v2: swing positions closed today from PRIOR days' decisions — record
         # their realized round trips (today's decision won't contain them).
         for sym, pnl in fills.items():
-            if sym not in taken and sym not in still_open:
+            if sym not in taken and sym not in still_open \
+               and (today_et(), sym, "SWING_CLOSED") not in seen:
                 w.writerow({
                     "date": today_et(), "symbol": sym, "action": "SWING_CLOSED",
                     "conviction": "", "catalyst_type": "", "reject_reason": "",
@@ -136,9 +227,11 @@ def main():
                 print(f"SWING_CLOSED {sym:6s} realized {pnl}%")
 
         for sym, t in taken.items():
-            o, c = get_open_close(sym)
-            oc = round((c - o) / o * 100, 2) if o and c else ""
             action = "OPEN_SWING" if sym in still_open else "TAKEN"
+            if (today_et(), sym, action) in seen:
+                continue
+            o, c = safe_open_close(sym)
+            oc = round((c - o) / o * 100, 2) if o and c else ""
             w.writerow({
                 "date": today_et(), "symbol": sym, "action": action,
                 "conviction": t.get("conviction", ""),
@@ -150,7 +243,9 @@ def main():
             print(f"{action:9s}{sym:6s} open->close {oc}%  realized {fills.get(sym, chr(39)+chr(110)+chr(47)+chr(97)+chr(39))}%")
 
         for sym, r in rejected.items():
-            o, c = get_open_close(sym)
+            if (today_et(), sym, "REJECTED") in seen:
+                continue
+            o, c = safe_open_close(sym)
             oc = round((c - o) / o * 100, 2) if o and c else ""
             w.writerow({
                 "date": today_et(), "symbol": sym, "action": "REJECTED",

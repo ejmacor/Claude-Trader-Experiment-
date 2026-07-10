@@ -1,22 +1,25 @@
-name: Midday Position Management
+name: EOD Flatten
 
 on:
   schedule:
-    # 16:40 UTC = 12:40pm ET during EDT. Actions cron can lag, so this
-    # lands roughly 12:40-1:00pm ET — squarely midday.
-    # NOTE: When clocks change to EST in November, update to '40 17 * * 1-5'.
-    - cron: '40 16 * * 1-5'
+    # GitHub cron is UTC. 19:50 UTC = 3:50pm ET during EDT — ten minutes
+    # before the close. 19:58 backup in case the first slot is skipped
+    # (run_eod.py is idempotent: with nothing open it does nothing).
+    # NOTE: When clocks change to EST in November, shift both +1 hour
+    # ('50 20 * * 1-5' and '58 20 * * 1-5').
+    - cron: '50 19 * * 1-5'
+    - cron: '58 19 * * 1-5'
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
 concurrency:
-  group: midday-manage
+  group: eod-flatten
   cancel-in-progress: false
 
 jobs:
-  manage:
+  flatten:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,16 +51,15 @@ jobs:
           is_open = bool(r.json())
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"market_open={'true' if is_open else 'false'}\n")
-          print("Market open today:", is_open)
+          print("Market open today (ET):", is_open)
           EOF
 
-      - name: Run midday manager
+      - name: Flatten all positions
         if: steps.holiday.outputs.market_open == 'true'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python run_midday.py | tee midday_out.txt
+        run: python run_eod.py | tee eod_out.txt
 
       - name: Commit logs
         if: steps.holiday.outputs.market_open == 'true'
@@ -66,7 +68,7 @@ jobs:
           git config user.email "actions@github.com"
           git add logs/ || true
           if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
-          git commit -m "logs: midday session $(TZ=America/New_York date +%F)"
+          git commit -m "logs: eod flatten $(TZ=America/New_York date +%F)"
           for i in 1 2 3; do
             if git push; then exit 0; fi
             git pull --rebase origin main
@@ -85,13 +87,33 @@ jobs:
           topic = os.environ.get("NTFY_TOPIC", "").strip()
           if not topic:
               raise SystemExit(0)
-          et_now = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
+          et = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
           try:
-              msg = open("midday_out.txt").read().strip()[:800] or "Midday session ran."
+              msg = open("eod_out.txt").read().strip()[:700] or "EOD flatten ran."
           except FileNotFoundError:
-              msg = "Midday session FAILED before producing output — check Actions."
+              msg = "EOD flatten FAILED before producing output — check Actions."
           req = urllib.request.Request(
-              f"https://ntfy.sh/{topic}", data=f"[{et_now}] {msg}".encode(),
-              headers={"Title": f"Claude Trader: midday manager ({et_now})", "Tags": "scales"})
+              f"https://ntfy.sh/{topic}", data=f"[{et}] {msg}".encode(),
+              headers={"Title": f"Claude Trader: EOD flatten ({et})", "Tags": "checkered_flag"})
           urllib.request.urlopen(req, timeout=30)
           EOF
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF2'
+          import os, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              raise SystemExit(0)
+          et = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=f"[{et}] EOD FLATTEN FAILED — positions may be held overnight. Check GitHub Actions NOW.".encode(),
+              headers={"Title": "Claude Trader: EOD FAILURE", "Tags": "rotating_light", "Priority": "high"})
+          urllib.request.urlopen(req, timeout=30)
+          EOF2

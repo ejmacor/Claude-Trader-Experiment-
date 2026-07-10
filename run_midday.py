@@ -31,10 +31,15 @@ import anthropic
 import config
 import executor
 import scanner  # reuse news fetch + retry helper
+import trade_logger
 
 MIDDAY_LOG = "logs/midday.jsonl"
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+def _client():
+    """Lazy: a missing ANTHROPIC_API_KEY must never prevent the mechanical
+    R1-R3 rules from protecting open positions."""
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 JUDGE_PROMPT = """You are the midday risk manager for a paper-trading experiment.
 For each open position you get: entry price, current price, R multiple
@@ -92,12 +97,30 @@ def main():
         print("Midday session disabled in config.")
         return
 
+    # Fresh equity snapshot — keeps the dashboard curve tracking the
+    # account intraday instead of freezing at the morning print.
+    try:
+        trade_logger.log_equity(executor.get_account())
+    except Exception as e:  # noqa: BLE001 — snapshot failure never blocks management
+        print(f"Equity snapshot failed (ignored): {e}")
+
     positions = executor.get_open_positions()
     if not positions:
         print("No open positions — nothing to manage.")
         return
 
     ctx = entry_context()
+
+    # Swing detection fallback: any symbol with a live GTC sell bracket is a
+    # swing even if the trade log predates the module column.
+    gtc_swings = set()
+    try:
+        for o in executor.get_open_orders():
+            if o.get("side") == "sell" and o.get("time_in_force") == "gtc":
+                gtc_swings.add(o["symbol"])
+    except Exception:  # noqa: BLE001
+        pass
+
     actions, needs_judgment = [], []
 
     for p in positions:
@@ -107,11 +130,12 @@ def main():
         risk = stop_distance(sym, entry)
         r_multiple = (current - entry) / risk if risk else 0.0
         meta = ctx.get(sym, {})
+        is_swing = meta.get("module") == "SWING_CATALYST" or sym in gtc_swings
         pos = {"symbol": sym, "entry": entry, "current": current,
                "r_multiple": round(r_multiple, 2), **meta}
 
         # R3 — swing time stop
-        if meta.get("module") == "SWING_CATALYST" and age_in_days(meta.get("entry_date", "")) >= config.SWING_MAX_HOLD_DAYS:
+        if is_swing and age_in_days(meta.get("entry_date", "")) >= config.SWING_MAX_HOLD_DAYS:
             executor.close_position(sym)
             actions.append({**pos, "action": "CLOSE", "rule": "TIME_STOP",
                             "reason": f"swing hold reached {config.SWING_MAX_HOLD_DAYS} days"})
@@ -140,7 +164,7 @@ def main():
     # Claude judgment on the remainder
     if needs_judgment:
         try:
-            resp = client.messages.create(
+            resp = _client().messages.create(
                 model=config.CLAUDE_MODEL, max_tokens=1000, system=JUDGE_PROMPT,
                 messages=[{"role": "user", "content": json.dumps(needs_judgment, indent=2)}],
             )

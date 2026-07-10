@@ -16,6 +16,7 @@ Output: candidate dicts with price, gap, technicals, and news.
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -112,7 +113,14 @@ def technicals(bars, last_price):
 
 
 def _is_today(bar):
-    return bar.get("t", "").startswith(datetime.now(timezone.utc).date().isoformat())
+    """Bar 't' is UTC ISO; the trading day is ET. Compare on the ET date."""
+    ts = bar.get("t", "")
+    try:
+        d = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(
+            ZoneInfo("America/New_York")).date().isoformat()
+    except (ValueError, TypeError):
+        return False
+    return d == datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
 def build_candidates():

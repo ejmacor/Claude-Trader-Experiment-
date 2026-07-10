@@ -12,8 +12,10 @@ report card, not a coach.
 """
 
 import csv
+import glob
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,16 +25,53 @@ ET = ZoneInfo("America/New_York")
 MODEL = "claude-sonnet-4-6"
 JOURNAL_DIR = "journal"
 
+WIKILINK_RE = re.compile(r"\[\[([^\[\]|]+?)(?:\|[^\[\]]*)?\]\]")
+
 
 def today_et():
     return datetime.now(ET).date()
 
 
 def week_window():
-    """Monday..today (ET) of the current trading week."""
-    end = today_et()
-    start = end - timedelta(days=end.weekday())  # Monday
-    return start.isoformat(), end.isoformat()
+    """Monday..Friday (ET) of the current trading week.
+
+    End is clamped to Friday so a run that drifts into Saturday (GitHub
+    cron delay) reviews the same window and writes the same filename —
+    this is what previously produced duplicate 07-03 + 07-04 reviews.
+    """
+    today = today_et()
+    start = today - timedelta(days=today.weekday())          # Monday
+    friday = start + timedelta(days=4)
+    end = min(today, friday)
+    return start.isoformat(), end.isoformat(), friday.isoformat()
+
+
+def existing_graph():
+    """Inventory of every wikilink node already in the journal, by type,
+    plus each prior review's Threads line. This is the graph's memory:
+    without it the reviewer invents fresh pattern names every week and
+    the brain map fragments instead of growing heavier on repeats.
+
+    Write-only boundary intact: only the REVIEWER sees this; the trading
+    model never reads the journal.
+    """
+    nodes = {"pattern": set(), "catalyst": set(), "ticker": set(),
+             "miss": set(), "call": set(), "other": set()}
+    threads = []
+    for path in sorted(glob.glob(f"{JOURNAL_DIR}/*.md")):
+        try:
+            with open(path) as f:
+                text = f.read()
+        except OSError:
+            continue
+        for m in WIKILINK_RE.finditer(text):
+            node = m.group(1).strip()
+            kind = node.split("-", 1)[0] if "-" in node else "other"
+            nodes.get(kind, nodes["other"]).add(node)
+        for line in text.splitlines():
+            if line.strip().lower().startswith(("threads", "**threads")):
+                threads.append(f"{os.path.basename(path)}: {line.strip()}")
+    return {k: sorted(v) for k, v in nodes.items() if v}, threads[-6:]
 
 
 def load_jsonl(path):
@@ -67,7 +106,13 @@ def et_date_of(ts):
 
 
 def main():
-    start, end = week_window()
+    start, end, friday = week_window()
+
+    # Idempotency: one review per trading week, anchored to its Friday.
+    fname = f"{JOURNAL_DIR}/{friday}-weekly-self-review.md"
+    if os.path.exists(fname) and not os.environ.get("FORCE_REVIEW"):
+        print(f"{fname} already exists — one review per week. Skipping.")
+        return
 
     # --- gather the week's record ---
     decisions_raw = load_jsonl("logs/decisions.jsonl")
@@ -104,12 +149,15 @@ def main():
         "equity": eq_now,
     }
 
+    graph_nodes, prior_threads = existing_graph()
     payload = {
         "week": {"start": start, "end": end},
         "daily_decisions": week_decisions,
         "trades_placed": week_trades,
         "outcomes_this_week": week_outcomes,
         "cumulative": cumulative,
+        "existing_graph_nodes": graph_nodes,
+        "prior_review_threads": prior_threads,
     }
 
     system = """You are the weekly reviewer for an autonomous paper-trading
@@ -139,9 +187,13 @@ KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
 - Every recurring behavior you identify, good or bad, as a pattern node
   with a short kebab-case name, e.g. [[pattern-already-run-gaps]],
   [[pattern-holiday-tape-junk]], [[pattern-overweighting-headline-size]].
-  REUSE existing pattern names from prior reviews when the same behavior
-  recurs — repetition is what makes the graph meaningful. Invent a new
-  pattern node only for a genuinely new behavior.
+  The payload's `existing_graph_nodes` lists EVERY node already in the
+  graph and `prior_review_threads` shows what past reviews flagged.
+  You MUST reuse those exact node names when the same behavior, ticker,
+  or catalyst recurs — repetition is what makes recurring behaviors grow
+  heavy in the graph. Invent a new pattern node only for a genuinely new
+  behavior, and when you do, also link it to at least one existing node
+  in prose so the graph stays connected rather than fragmenting.
 - Significant single events: [[miss-YYYY-MM-DD-TICKER]] for a costly
   wrong call, [[call-YYYY-MM-DD-TICKER]] for a notably right one.
 - End with a "Threads" line listing the 3-6 most important links from
@@ -159,7 +211,6 @@ KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
     review = "".join(b.text for b in resp.content if b.type == "text").strip()
 
     os.makedirs(JOURNAL_DIR, exist_ok=True)
-    fname = f"{JOURNAL_DIR}/{end}-weekly-self-review.md"
     with open(fname, "w") as f:
         f.write(f"*Machine-written post-mortem — Claude reviewing its own "
                 f"week of {start} to {end}. Write-only: the trading model "

@@ -42,8 +42,10 @@ def _request(method, path, retries=3, **kwargs):
             resp.raise_for_status()
             return resp
         except requests.HTTPError as e:
-            # 4xx = our fault, don't retry. 5xx = transient, retry.
-            if e.response is not None and 400 <= e.response.status_code < 500:
+            # 4xx = our fault, don't retry — EXCEPT 429 (rate limit), which
+            # is transient and retryable. 5xx = transient, retry.
+            if e.response is not None and 400 <= e.response.status_code < 500 \
+               and e.response.status_code != 429:
                 raise
             last_err = e
         except Exception as e:  # noqa: BLE001
@@ -149,6 +151,11 @@ def size_position(equity, entry_price, stop_price, risk_mult=1.0):
 
 
 def place_bracket(symbol, ref_price, atr=None, module="DAY_MOMENTUM", regime_mult=1.0):
+    # Hard no-overnight rule: while the swing module is disabled, no code
+    # path may place a GTC bracket — regardless of what the caller asked for.
+    if module == "SWING_CATALYST" and not config.SWING_ENABLED:
+        module = "DAY_MOMENTUM"
+
     account = get_account()
     equity = float(account["equity"])
 

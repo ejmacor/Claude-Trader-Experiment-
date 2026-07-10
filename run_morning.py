@@ -35,10 +35,19 @@ def already_ran_today():
         timeout=30,
     )
     resp.raise_for_status()
-    # GTC swing brackets from prior days shouldn't trip the guard — only orders SUBMITTED today count
+    # Orders from prior days shouldn't trip the guard — only orders SUBMITTED
+    # today (ET) count. Timestamps from Alpaca are UTC; convert before comparing.
     today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-    return any((o.get("submitted_at") or "").startswith(today) or
-               (o.get("created_at") or "")[:10] == today for o in resp.json())
+
+    def _et_date(ts):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(
+                ZoneInfo("America/New_York")).date().isoformat()
+        except (ValueError, TypeError, AttributeError):
+            return ""
+
+    return any(_et_date(o.get("submitted_at")) == today or
+               _et_date(o.get("created_at")) == today for o in resp.json())
 
 
 def main():
@@ -141,7 +150,7 @@ def main():
              + ("" if execution.get("verified") else " | UNVERIFIED"))
         print(f"      {sym:6s} score {trade.get('setup_score')}/10 -> {status}")
 
-    print("\n[5/5] Run complete. Day brackets flatten at close; swing brackets persist (GTC).")
+    print("\n[5/5] Run complete. Day-only mode: the 3:50pm ET flatten job guarantees no overnight positions.")
 
 
 if __name__ == "__main__":

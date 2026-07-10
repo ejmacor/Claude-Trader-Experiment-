@@ -9,7 +9,8 @@ never touches trading.
 
 import csv
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -33,7 +34,7 @@ def log_spy():
     resp.raise_for_status()
     close = float(resp.json()["bar"]["c"])
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     os.makedirs("logs", exist_ok=True)
 
     # one row per date — skip if today already logged

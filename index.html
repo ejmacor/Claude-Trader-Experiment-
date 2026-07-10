@@ -9,7 +9,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,700;125,800&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"
+        onerror="var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js';document.head.appendChild(s);"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1"></script>
 <style>
@@ -323,7 +324,7 @@ footer .sep{color:var(--line-strong)}
     <footer>
       <span>CLAUDE TRADER · 90-day frozen-rules experiment</span><span class="sep">|</span>
       <span>Paper account · no real capital</span><span class="sep">|</span>
-      <span>Long-only · max 3/day · 4% stop · 8% target</span><span class="sep">|</span>
+      <span>Long-only · max 3/day · ATR brackets · flat by close (3:50pm ET)</span><span class="sep">|</span>
       <a href="https://github.com/ejmacor/Claude-Trader-Experiment-" rel="noopener">Source &amp; logs</a>
     </footer>
   </div>
@@ -379,6 +380,8 @@ function parseJSONL(text){
   return text.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean);
 }
 const truthy = v => v===true || v==="True" || v==="true";
+/* firewall: one broken panel must never take down the panels after it */
+function safe(label, fn){ try{ fn(); }catch(e){ console.error("[dashboard] "+label+" failed:", e); } }
 
 /* ---------- load ---------- */
 let chart = null;
@@ -390,7 +393,10 @@ async function load(){
   ]);
   const regimeRows = parseJSONL(rgT);
   const middayRows = parseJSONL(mdT);
-  const equity = parseCSV(eqT);
+  /* one snapshot per date — the LAST row logged that day wins (freshest) */
+  const eqMap = new Map();
+  for(const r of parseCSV(eqT)){ if(r && r.date) eqMap.set(r.date, r); }
+  const equity = [...eqMap.values()].sort((a,b)=>a.date<b.date?-1:1);
   const trades = parseCSV(trT).filter(r=>r && r.symbol);
   const outcomes = parseCSV(ouT).filter(r=>r && r.symbol);
   const raw = parseJSONL(deT);
@@ -425,8 +431,12 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
   $("dayLabel").textContent = `DAY ${day} / ${DAYS}`;
   $("dayFill").style.width = (day/DAYS*100).toFixed(1) + "%";
 
-  /* as-of */
-  const lastTs = decisions.length ? decisions[0].row.timestamp : null;
+  /* as-of: freshest of morning decision / midday session */
+  const tsCandidates = [
+    decisions.length ? decisions[0].row.timestamp : null,
+    middayRows.length ? middayRows[middayRows.length-1].timestamp : null,
+  ].filter(Boolean).sort();
+  const lastTs = tsCandidates.length ? tsCandidates[tsCandidates.length-1] : null;
   $("asOf").textContent = "as of " + (lastTs
     ? new Date(lastTs).toLocaleString("en-US",{timeZone:"America/New_York",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) + " ET"
     : "— no runs yet");
@@ -493,6 +503,7 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
   $("kRegimeSub").textContent = rg ? ("risk ×"+rg.risk_mult+(rg.detail&&rg.detail.realized_vol_20d_pct?(" · vol "+rg.detail.realized_vol_20d_pct+"%"):"")) : "logged each morning run";
 
   /* ---------- equity chart: v1 live vs v2 shadow vs SPY ---------- */
+  safe("equity chart", ()=>{
   const labels = equity.length ? equity.map(r=>r.date) : [new Date().toISOString().slice(0,10)];
   const values = equity.length ? equity.map(r=>Number(r.equity)) : [BASELINE];
 
@@ -587,8 +598,10 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
       }
     }]
   });
+  }); /* end safe: equity chart */
 
   /* ---------- judgment readout ---------- */
+  safe("judgment readout", ()=>{
   if(outcomes.length){
     const takenAll = outcomes.filter(o=>o.action==="TAKEN");
     const rejAll = outcomes.filter(o=>o.action==="REJECTED" && o.open_to_close_pct!=="" && o.open_to_close_pct!=null);
@@ -631,15 +644,21 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
     }
     if(html) $("judgment").innerHTML = html;
   }
+  }); /* end safe: judgment */
 
   /* ---------- trade ledger ---------- */
+  safe("trade ledger", ()=>{
   if(executed.length){
     $("tradesEmpty").style.display = "none";
     $("tradesTable").style.display = "table";
     const outBySym = {};
     for(const o of outcomes) if(o.action==="TAKEN") outBySym[o.date+"|"+o.symbol]=o;
+    /* swing trades close on a LATER date under SWING_CLOSED — join by symbol, on/after entry */
+    const swingClosed = outcomes.filter(o=>o.action==="SWING_CLOSED");
+    const swingOpen = new Set(outcomes.filter(o=>o.action==="OPEN_SWING").map(o=>o.symbol));
     $("tradesBody").innerHTML = executed.slice().reverse().map((t,i)=>{
-      const o = outBySym[t.date+"|"+t.symbol];
+      let o = outBySym[t.date+"|"+t.symbol]
+           || swingClosed.find(s=>s.symbol===t.symbol && s.date>=t.date);
       const res = o && o.realized_pnl_pct!=="" && o.realized_pnl_pct!=null ? Number(o.realized_pnl_pct) : null;
       return `
       <tr class="row" data-i="${i}" tabindex="0" role="button" aria-expanded="false">
@@ -667,8 +686,10 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
       e.preventDefault(); toggleWhy(row);
     });
   }
+  }); /* end safe: trade ledger */
 
   /* ---------- decision wire ---------- */
+  safe("decision wire", ()=>{
   if(decisions.length){
     $("feed").innerHTML = decisions.map(({date,row},i)=>{
       const dec = row.decision||{};
@@ -693,8 +714,10 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
   } else {
     $("feed").innerHTML = `<div class="empty"><b>The wire is quiet</b>Verdicts appear here after each trading morning — including the days Claude declines everything.</div>`;
   }
+  }); /* end safe: decision wire */
 
   /* ---------- shadow pipeline: gate + challenger -> v2 ---------- */
+  safe("shadow pipeline", ()=>{
   if(shadow && shadow.length){
     $("shadowGate").innerHTML = shadow.map(({date,row})=>{
       const ev = row.evaluated||[], s = row.summary||{};
@@ -734,6 +757,7 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
       $("sgHint").style.color = spread>0 ? "var(--green)" : "var(--red)";
     }
   }
+  }); /* end safe: shadow pipeline */
 }
 
 function toggleDay(h){

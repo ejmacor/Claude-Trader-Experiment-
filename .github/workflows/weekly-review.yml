@@ -4,8 +4,11 @@ on:
   schedule:
     # Fridays 21:40 UTC = 5:40pm ET during EDT (after the evening review
     # has committed the week's outcomes at ~21:10).
-    # NOTE: When clocks change to EST in November, update to '40 22 * * 5'.
+    # Saturday 13:40 UTC backup: self_review.py is idempotent (skips if the
+    # Friday-anchored file exists) and clamps the window to Mon–Fri.
+    # NOTE: When clocks change to EST in November, shift the Friday cron +1h.
     - cron: '40 21 * * 5'
+    - cron: '40 13 * * 6'
   workflow_dispatch: {}
 
 permissions:
@@ -36,7 +39,12 @@ jobs:
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
           git add journal/ || true
-          git diff --cached --quiet || git commit -m "journal: weekly self-review $(date -u +%F)"
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "journal: weekly self-review $(TZ=America/New_York date +%F)"
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            git pull --rebase origin main
+          done
           git push
 
       - name: Notify phone with the verdict
@@ -46,6 +54,8 @@ jobs:
         run: |
           python - <<'EOF'
           import os, re, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
 
           topic = os.environ.get("NTFY_TOPIC", "").strip()
           if not topic:
@@ -63,10 +73,11 @@ jobs:
           except FileNotFoundError:
               pass
 
+          et_now = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
           req = urllib.request.Request(
               f"https://ntfy.sh/{topic}",
-              data=msg.encode("utf-8"),
-              headers={"Title": "Claude Trader: weekly self-review", "Tags": "brain"},
+              data=f"[{et_now}] {msg}".encode("utf-8"),
+              headers={"Title": f"Claude Trader: weekly self-review ({et_now})", "Tags": "brain"},
           )
           urllib.request.urlopen(req, timeout=30)
           print("Notification sent.")

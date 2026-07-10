@@ -17,7 +17,7 @@ Both are regime-gated and sized by volatility.
 # ---- Experiment ----
 EXPERIMENT_START = "2026-07-06"    # v2 day 1 — fresh 90-day clock
 EXPERIMENT_DAYS = 90
-CONFIG_VERSION = "2.0"
+CONFIG_VERSION = "2.1"          # 2026-07-10: swing disabled (day-only), EOD flatten added
 
 # ---- Account / Risk (paper) ----
 STARTING_EQUITY = 100_000
@@ -64,12 +64,19 @@ ENTRY_TYPE = "market_on_open"
 DAY_TIME_IN_FORCE = "day"          # flat by close
 
 # ---- Module B: SWING_CATALYST ----
-SWING_ENABLED = True
+# CONFIG CHANGE 2026-07-10: SWING disabled — experiment is day-only, no
+# overnight positions. Analyst demotes any SWING_CATALYST proposal to
+# DAY_MOMENTUM automatically; the 3:50pm ET flatten job (run_eod.py)
+# enforces flat-by-close on everything.
+SWING_ENABLED = False
 SWING_TIME_IN_FORCE = "gtc"        # bracket persists overnight
 SWING_MAX_HOLD_DAYS = 5            # time stop: evening job closes anything older
 SWING_RISK_SCALE = 0.75            # swing carries gap risk -> 75% of normal risk unit
 SWING_MAX_POSITIONS = 2
 SWING_ALLOWED_CATALYSTS = {"earnings", "ma", "fda", "contract"}  # hard catalysts only
+
+# ---- End-of-day flatten (3:50pm ET) ----
+EOD_FLATTEN_ENABLED = True         # hard no-overnight rule: close everything before the bell
 
 # ---- Midday management session (12:30pm ET) ----
 MIDDAY_ENABLED = True

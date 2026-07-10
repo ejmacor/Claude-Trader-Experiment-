@@ -71,12 +71,14 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: |
           python - <<'EOF'
-          import os, requests, datetime, sys
+          import os, requests
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
           headers = {
               "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
               "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
           }
-          today = datetime.date.today().isoformat()
+          today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
           r = requests.get(
               "https://paper-api.alpaca.markets/v2/calendar",
               headers=headers, params={"start": today, "end": today}, timeout=30)
@@ -101,7 +103,12 @@ jobs:
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
           git add logs/ || true
-          git diff --cached --quiet || git commit -m "logs: morning run $(date -u +%F)"
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "logs: morning run $(TZ=America/New_York date +%F)"
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            git pull --rebase origin main
+          done
           git push
 
       - name: Push notification to phone
@@ -119,6 +126,7 @@ jobs:
               print("No NTFY_TOPIC secret set; skipping notification.")
               raise SystemExit(0)
 
+          et_now = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
           today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
           msg, title = "Run finished but no decision was logged (check Actions).", "Claude Trader"
           try:
@@ -137,19 +145,19 @@ jobs:
                   dec = last.get("decision", {})
                   trades = dec.get("trades", [])
                   if trades:
-                      title = f"Claude Trader: {len(trades)} trade(s) today"
+                      title = f"Claude Trader: {len(trades)} trade(s) today ({et_now})"
                       lines = [f"{t['symbol']} conviction {t.get('conviction','?')}/10 ({t.get('catalyst_type','')})"
                                for t in trades]
                       msg = "\n".join(lines) + "\n\n" + dec.get("market_note", "")[:300]
                   else:
-                      title = "Claude Trader: no trades today"
+                      title = f"Claude Trader: no trades today ({et_now})"
                       msg = dec.get("market_note", "No qualifying setups.")[:400]
           except FileNotFoundError:
               pass
 
           req = urllib.request.Request(
               f"https://ntfy.sh/{topic}",
-              data=msg.encode("utf-8"),
+              data=f"[{et_now}] {msg}".encode("utf-8"),
               headers={"Title": title, "Tags": "chart_with_upwards_trend"},
           )
           urllib.request.urlopen(req, timeout=30)
@@ -163,12 +171,15 @@ jobs:
         run: |
           python - <<'EOF2'
           import os, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
           topic = os.environ.get("NTFY_TOPIC", "").strip()
           if not topic:
               raise SystemExit(0)
+          et_now = datetime.now(ZoneInfo("America/New_York")).strftime("%-I:%M %p ET")
           req = urllib.request.Request(
               f"https://ntfy.sh/{topic}",
-              data=b"MORNING RUN FAILED - check GitHub Actions logs. No trades may have been placed today.",
+              data=f"[{et_now}] MORNING RUN FAILED - check GitHub Actions logs. No trades may have been placed today.".encode(),
               headers={"Title": "Claude Trader: FAILURE", "Tags": "rotating_light", "Priority": "high"})
           urllib.request.urlopen(req, timeout=30)
           EOF2

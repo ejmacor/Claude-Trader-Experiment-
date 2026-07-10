@@ -20,7 +20,18 @@ import anthropic
 
 import config
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def _client():
+    """Lazy: import of this module must never require the API key."""
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+
+def _score(v):
+    """Parse a model-provided score defensively: '7', 7, 7.5, None all safe.
+    Unparseable -> 0 (fails the gate) rather than crashing the run."""
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
 
 SYSTEM_PROMPT = """You are the analyst for a systematic paper-trading experiment (v2 engine).
 You receive today's pre-market gappers with news AND technical context, plus the
@@ -98,7 +109,7 @@ def analyze(candidates, regime):
         + json.dumps(candidates, indent=2)
     )
 
-    resp = client.messages.create(
+    resp = _client().messages.create(
         model=config.CLAUDE_MODEL,
         max_tokens=config.CLAUDE_MAX_TOKENS,
         system=system,
@@ -119,7 +130,7 @@ def analyze(candidates, regime):
     kept, gated = [], []
     swing_count = 0
     for t in trades:
-        if int(t.get("setup_score") or 0) < config.MIN_SETUP_SCORE:
+        if _score(t.get("setup_score")) < config.MIN_SETUP_SCORE:
             gated.append({"symbol": t.get("symbol"), "reason": f"setup_score {t.get('setup_score')} below {config.MIN_SETUP_SCORE} gate"})
             continue
         if t.get("module") == "SWING_CATALYST":

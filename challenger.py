@@ -24,7 +24,8 @@ import config
 
 CHALLENGER_LOG = "logs/challenger.jsonl"
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def _client():
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 SYSTEM_PROMPT = """You are the independent risk officer for a systematic
 paper-trading experiment. An analyst has proposed long day-trades on
@@ -80,7 +81,7 @@ def review(candidates, decision):
     }
 
     try:
-        resp = client.messages.create(
+        resp = _client().messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=1500,
             system=SYSTEM_PROMPT.format(stop=config.STOP_PCT_CEIL, target=config.STOP_PCT_CEIL * config.TARGET_ATR_MULT / config.STOP_ATR_MULT),
