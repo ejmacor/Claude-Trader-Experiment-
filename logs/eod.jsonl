@@ -6,3 +6,4 @@
 {"timestamp": "2026-07-14T23:15:36.192200+00:00", "et_time": "2026-07-14 07:15 PM ET", "flattened": []}
 {"timestamp": "2026-07-15T23:14:34.943153+00:00", "et_time": "2026-07-15 07:14 PM ET", "flattened": [{"symbol": "AEHR", "qty": "141", "entry": "88.49", "last": "87.9139", "unrealized_pl": "-81.2301"}]}
 {"timestamp": "2026-07-15T23:35:47.898186+00:00", "et_time": "2026-07-15 07:35 PM ET", "flattened": [{"symbol": "AEHR", "qty": "141", "entry": "88.49", "last": "87.9066", "unrealized_pl": "-82.2594"}]}
+{"timestamp": "2026-07-16T23:11:32.165920+00:00", "et_time": "2026-07-16 07:11 PM ET", "flattened": [{"symbol": "AEHR", "qty": "141", "entry": "88.49", "last": "82.73", "unrealized_pl": "-812.16"}]}
