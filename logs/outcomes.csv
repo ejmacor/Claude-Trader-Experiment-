@@ -2,3 +2,5 @@ date,symbol,action,conviction,catalyst_type,reject_reason,open_to_close_pct,real
 2026-07-02,CLRO,REJECTED,,,Already gapped 100%+ the prior day on an M&A deal involving share issuance and a dilutive S-1 filing for $10-15M raise — the catalyst is fully priced (and then some) and the upcoming dilution is a structural headwind against continuation; micro-cap at $8.6M market cap with halts screams pump risk.,82.73,
 2026-07-02,MIDDV,REJECTED,,,"This is a 'when issued' ex-distribution ticker (MIDDV) with no standalone news catalyst — the price movement reflects a corporate distribution/spinoff mechanics, not a tradeable gap continuation setup.",,
 2026-07-02,SLBT,REJECTED,,,"No identifiable catalyst in the news — the summary doesn't even mention SLBT, making this a gap with no verifiable fundamental driver; likely a sympathy or low-float move.",36.59,
+2026-07-15,PENG,SWING_CLOSED,,,,,-0.92
+2026-07-15,AEHR,OPEN_SWING,7,earnings,,-10.48,
