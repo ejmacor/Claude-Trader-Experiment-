@@ -12,3 +12,5 @@ date,symbol,action,conviction,catalyst_type,reject_reason,open_to_close_pct,real
 2026-08-07,NTRA,OPEN_SWING,7,earnings,,2.22,
 2026-08-07,DOCS,REJECTED,,,Massive 80% gap on an earnings beat is compelling but guidance raise was minimal ($671-681M vs prior $664-676M on just slightly above consensus) and Q2 guide ($170-171M) actually came in below the $171.9M estimate — this limits the PEAD argument — while relative volume of 0.42 is well below the 2x threshold for a name that requires high conviction to chase at these extended levels.,-30.02,
 2026-08-07,TEAM,REJECTED,,,GATE VETO: +36.6% gap — chasing extension past 30%,2.24,
+2026-08-11,FRMI,OPEN_SWING,6,contract,,0.64,
+2026-08-11,FRMI,REJECTED,,,Flagged for dual-module consideration but accepted as SWING_CATALYST above; secondary rejection note: the 0.32 relative volume is a serious red flag and position sizing should be minimal until market-hours volume confirms genuine institutional interest.,0.64,
