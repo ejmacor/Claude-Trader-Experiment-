@@ -51,3 +51,4 @@
 {"timestamp": "2026-08-24T13:10:35.566641+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 765.64, "sma50": 751.71, "sma200": 707.52, "realized_vol_20d_pct": 13.0}}
 {"timestamp": "2026-08-24T13:25:38.580073+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 765.64, "sma50": 751.71, "sma200": 707.52, "realized_vol_20d_pct": 13.0}}
 {"timestamp": "2026-08-25T13:09:07.624043+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 763.46, "sma50": 752.23, "sma200": 707.96, "realized_vol_20d_pct": 13.1}}
+{"timestamp": "2026-08-25T13:16:39.604699+00:00", "regime": "BULL_QUIET", "risk_mult": 1.0, "detail": {"spy": 763.46, "sma50": 752.23, "sma200": 707.96, "realized_vol_20d_pct": 13.1}}
