@@ -14,3 +14,10 @@ date,symbol,action,conviction,catalyst_type,reject_reason,open_to_close_pct,real
 2026-08-07,TEAM,REJECTED,,,GATE VETO: +36.6% gap — chasing extension past 30%,2.24,
 2026-08-11,FRMI,OPEN_SWING,6,contract,,0.64,
 2026-08-11,FRMI,REJECTED,,,Flagged for dual-module consideration but accepted as SWING_CATALYST above; secondary rejection note: the 0.32 relative volume is a serious red flag and position sizing should be minimal until market-hours volume confirms genuine institutional interest.,0.64,
+2026-07-17,AEHR,SWING_CLOSED,,,,,-9.88
+2026-08-06,IREN,SWING_CLOSED,,,,,-7.18
+2026-08-06,SMCI,SWING_CLOSED,,,,,-6.67
+2026-08-06,ARWR,SWING_CLOSED,,,,,-4.98
+2026-08-06,THC,SWING_CLOSED,,,,,13.75
+2026-09-01,TWLO,SWING_CLOSED,,,,,-4.47
+2026-09-01,FRMI,SWING_CLOSED,,,,,-31.01
