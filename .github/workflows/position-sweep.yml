@@ -1,0 +1,109 @@
+name: Position Sweep
+
+# Independent backstop for the EOD flatten.
+#
+# EOD flatten stopped producing output on 2026-07-16 and nothing noticed for
+# six weeks. One scheduled job was the only thing standing between the system
+# and stranded overnight inventory. That is a single point of failure, so this
+# is a second one on a different schedule, and the morning run has a third
+# (preflight) before its guardrails.
+#
+# 13:40 UTC = 9:40am ET (EDT) — ten minutes after the open, when market orders
+# actually fill. Anything left from a failed EOD gets cleared at the start of
+# the session rather than sitting for weeks.
+#
+# NOTE: when clocks change to EST in November, shift to '40 14 * * 1-5'.
+
+on:
+  schedule:
+    - cron: '40 13 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report only, place no orders'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: position-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+
+      - name: Check market open
+        id: mkt
+        continue-on-error: true
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, requests
+          headers = {
+              "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+              "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
+          }
+          r = requests.get("https://paper-api.alpaca.markets/v2/clock",
+                           headers=headers, timeout=30)
+          r.raise_for_status()
+          is_open = bool(r.json().get("is_open"))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"is_open={'true' if is_open else 'false'}\n")
+          print("Market open:", is_open)
+          EOF
+
+      # Deliberately fail-open: if the clock check itself errors we still run
+      # the sweep. preflight is idempotent and safe when the account is flat,
+      # and skipping remediation because a status probe failed is exactly the
+      # kind of silent no-op that caused the original outage.
+      - name: Sweep stale positions
+        if: steps.mkt.outputs.is_open != 'false'
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          python preflight.py --sweep ${{ inputs.dry_run && '--dry-run' || '' }} | tee sweep_out.txt
+
+      - name: Commit logs
+        if: always()
+        run: |
+          git config user.name "claude-trader-bot"
+          git config user.email "actions@github.com"
+          git add logs/ || true
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "logs: position sweep $(TZ=America/New_York date +%F)"
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            git pull --rebase origin main
+          done
+          git push
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, urllib.request
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if not topic:
+              raise SystemExit(0)
+          req = urllib.request.Request(
+              f"https://ntfy.sh/{topic}",
+              data=b"POSITION SWEEP FAILED - stale positions may be stranded. Check Actions.",
+              headers={"Title": "Claude Trader: SWEEP FAILURE",
+                       "Tags": "rotating_light", "Priority": "high"})
+          urllib.request.urlopen(req, timeout=30)
+          EOF

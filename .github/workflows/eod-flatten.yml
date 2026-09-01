@@ -29,8 +29,14 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
 
+      # continue-on-error + fail-open below: a failed status probe must not
+      # silently cancel the flatten. Under the old wiring, any error here left
+      # market_open empty, every subsequent step was skipped by its `== 'true'`
+      # condition, and positions were carried overnight with no alert that the
+      # flatten had not happened.
       - name: Skip if US market holiday
         id: holiday
+        continue-on-error: true
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -55,14 +61,14 @@ jobs:
           EOF
 
       - name: Flatten all positions
-        if: steps.holiday.outputs.market_open == 'true'
+        if: steps.holiday.outputs.market_open != 'false'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python run_eod.py | tee eod_out.txt
 
       - name: Commit logs
-        if: steps.holiday.outputs.market_open == 'true'
+        if: always()
         run: |
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
@@ -76,7 +82,7 @@ jobs:
           git push
 
       - name: Notify phone
-        if: always() && steps.holiday.outputs.market_open == 'true'
+        if: always() && steps.holiday.outputs.market_open != 'false'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |

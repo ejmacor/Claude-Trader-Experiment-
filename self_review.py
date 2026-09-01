@@ -105,6 +105,23 @@ def et_date_of(ts):
         return ""
 
 
+def _halt_reason():
+    """If the morning run halted rather than scanning, return why.
+
+    Distinguishes a genuinely quiet week from a broken one. Reads the health
+    ledger written by run_morning.py; absence of the file means we cannot
+    tell, and we say nothing rather than guess.
+    """
+    try:
+        import health
+        entry = health.read()["stages"].get("scan") or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    if entry.get("status") == "HALTED":
+        return entry.get("detail") or "guardrail halt (no reason recorded)"
+    return ""
+
+
 def main():
     start, end, friday = week_window()
 
@@ -140,7 +157,51 @@ def main():
     eq_now = equity[-1]["equity"] if equity else "100000"
 
     if not week_decisions:
-        print("No decisions this week; skipping review.")
+        # v2.1 FIX: this used to `return` silently. Between 2026-08-14 and
+        # 2026-09-01 the morning run was halting before the analyst, so no
+        # decisions were logged, so the journal simply went quiet — the one
+        # artifact that should have shouted about a dead pipeline was the
+        # artifact the dead pipeline silenced.
+        #
+        # A week with no decisions now still produces an entry. It just has
+        # to say WHY: "the scanner looked and found nothing" and "the system
+        # never got to look" are different weeks and must read differently.
+        reason = _halt_reason()
+        if reason:
+            body = (
+                f"## Halted Week\n\n"
+                f"No trading decisions were logged between {start} and {end}. "
+                f"This was **not** an absence of candidates — the pipeline did not "
+                f"reach the scanner.\n\n"
+                f"**Reported halt reason:** {reason}\n\n"
+                f"Nothing can be graded this week. This entry exists so the journal "
+                f"records the outage rather than leaving a silent gap that reads, "
+                f"in hindsight, like a quiet market.\n\n"
+                f"Equity at time of writing: {eq_now}.\n\n"
+                f"---\n\n**Threads:** [[pipeline-halt]] · [[infrastructure]]\n"
+            )
+        else:
+            body = (
+                f"## Quiet Week\n\n"
+                f"The scanner ran between {start} and {end} and no candidate "
+                f"cleared the filters, so no decisions were logged and nothing "
+                f"was traded. This is a legitimate outcome of a selective "
+                f"process, not a failure.\n\n"
+                f"Equity at time of writing: {eq_now}.\n\n"
+                f"---\n\n**Threads:** [[pattern-low-candidate-flow]]\n"
+            )
+        os.makedirs(JOURNAL_DIR, exist_ok=True)
+        with open(fname, "w") as f:
+            f.write(f"*Machine-written record — week of {start} to {end}. "
+                    f"No decisions logged; written by the review job itself, "
+                    f"not by the reviewing model.*\n\n{body}")
+        print(f"No decisions this week; wrote status entry to {fname}")
+        try:
+            import health
+            health.mark("weekly_review", "OK",
+                        "halted week recorded" if reason else "quiet week recorded")
+        except Exception:  # noqa: BLE001
+            pass
         return
 
     cumulative = {
@@ -217,6 +278,11 @@ KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
                 f"never reads this.*\n\n{review}\n")
 
     print(f"Review written to {fname}")
+    try:
+        import health
+        health.mark("weekly_review", "OK", f"review written for {start}..{end}")
+    except Exception:  # noqa: BLE001
+        pass
     # First ~300 chars for the phone notification
     print("SUMMARY_START")
     print(review[:300].replace("\n", " "))

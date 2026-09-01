@@ -33,6 +33,14 @@
   --ui:"Inter",system-ui,-apple-system,sans-serif;
   --display:"Archivo",var(--ui);
 }
+/* pipeline health banner — added v2.1 */
+#healthbar{display:none;margin:0 0 18px;border:1px solid var(--red);background:var(--red-dim);
+  border-radius:6px;padding:12px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.6}
+#healthbar.warn{border-color:var(--amber);background:var(--amber-dim)}
+#healthbar .hb-title{font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--red);margin-bottom:4px}
+#healthbar.warn .hb-title{color:var(--amber)}
+#healthbar .hb-detail{color:var(--muted)}
+#healthbar .hb-stage{color:var(--text)}
 *{box-sizing:border-box;margin:0;padding:0}
 html{scrollbar-color:var(--line-strong) var(--bg)}
 body{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
@@ -227,6 +235,7 @@ footer .sep{color:var(--line-strong)}
     </div>
   </div>
 </header>
+<div id="healthbar" role="status" aria-live="polite"></div>
 
 <div class="tape">
   <div class="wrap tape-inner" id="tape">
@@ -361,6 +370,7 @@ const FILES = {
   benchmark: "logs/benchmark.csv",
   regime: "logs/regime.jsonl",
   midday: "logs/midday.jsonl",
+  health: "logs/health.json",
 };
 
 const $ = id => document.getElementById(id);
@@ -392,14 +402,69 @@ const truthy = v => v===true || v==="True" || v==="true";
 /* firewall: one broken panel must never take down the panels after it */
 function safe(label, fn){ try{ fn(); }catch(e){ console.error("[dashboard] "+label+" failed:", e); } }
 
+
+/* ---------- pipeline health ----------
+   The dashboard used to read only equity_curve.csv and regime.jsonl, both of
+   which are written BEFORE the morning run's guardrail exit. So the page kept
+   updating for three weeks while the trading pipeline was dead. Liveness is
+   not function; this panel reports function. */
+const STAGE_LABEL = {
+  morning:"morning run", preflight:"preflight", scan:"scanner", execute:"execution",
+  midday:"midday manager", eod:"EOD flatten", evening:"evening review",
+  weekly_review:"weekly self-review"
+};
+function tradingDaysSince(dateStr){
+  if(!dateStr) return 999;
+  const start = new Date(dateStr + "T12:00:00");
+  if(isNaN(start)) return 999;
+  const today = new Date(etDate(new Date().toISOString()) + "T12:00:00");
+  let n = 0;
+  for(let d = new Date(start); d < today; ){
+    d.setDate(d.getDate() + 1);
+    if(d.getDay() !== 0 && d.getDay() !== 6) n++;
+  }
+  return n;
+}
+function renderHealth(text){
+  const el = $("healthbar");
+  if(!el) return;
+  let data = null;
+  try{ data = JSON.parse(text); }catch(e){ data = null; }
+  if(!data || !data.stages || !Object.keys(data.stages).length) return;
+
+  const problems = [];
+  for(const [stage, entry] of Object.entries(data.stages)){
+    const limit = stage === "weekly_review" ? 7 : 2;
+    const days = tradingDaysSince(entry.last_ok);
+    if(days > limit){
+      problems.push({stage, days, status: entry.status || "?", detail: entry.detail || ""});
+    }
+  }
+  if(!problems.length) return;
+
+  problems.sort((a,b)=>b.days-a.days);
+  const halted = problems.some(p => p.status === "HALTED" || p.status === "ERROR");
+  el.className = halted ? "" : "warn";
+  const rows = problems.map(p =>
+    `<div><span class="hb-stage">${STAGE_LABEL[p.stage] || p.stage}</span>` +
+    ` — no successful run in ${p.days > 900 ? "any recorded" : p.days} trading day(s)` +
+    ` <span class="hb-detail">[${p.status}]${p.detail ? " " + p.detail : ""}</span></div>`
+  ).join("");
+  el.innerHTML = `<div class="hb-title">${halted ? "Pipeline halted" : "Pipeline stale"}</div>${rows}` +
+    `<div class="hb-detail" style="margin-top:6px">Equity and regime panels below may still be` +
+    ` updating — those are written before the halt and are not evidence the system is trading.</div>`;
+  el.style.display = "block";
+}
+
 /* ---------- load ---------- */
 let chart = null;
 async function load(){
-  const [eqT, trT, ouT, deT, sgT, chT, bmT, rgT, mdT] = await Promise.all([
+  const [eqT, trT, ouT, deT, sgT, chT, bmT, rgT, mdT, hlT] = await Promise.all([
     getText(FILES.equity), getText(FILES.trades), getText(FILES.outcomes), getText(FILES.decisions),
     getText(FILES.shadow), getText(FILES.challenger), getText(FILES.benchmark),
-    getText(FILES.regime), getText(FILES.midday)
+    getText(FILES.regime), getText(FILES.midday), getText(FILES.health)
   ]);
+  safe("health banner", ()=>renderHealth(hlT));
   const regimeRows = parseJSONL(rgT);
   const middayRows = parseJSONL(mdT);
   /* one snapshot per date — the LAST row logged that day wins (freshest) */

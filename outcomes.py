@@ -105,12 +105,27 @@ def open_position_symbols():
         return set()
 
 
-def detect_swing_closes(still_open, seen):
-    """Realized P&L for multi-day swings that closed, via their own bracket
-    order legs. Same-day fill matching can never catch these: the buy fill
-    is from a prior day, so today's orders only show the sell side.
+def _et_day(ts):
+    """ET calendar date of an Alpaca UTC timestamp. The exit is dated when it
+    actually happened, not when the recorder noticed it — a backfilled close
+    stamped with today's date would silently corrupt every date|symbol join."""
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(
+            ZoneInfo("America/New_York")).date().isoformat()
+    except (ValueError, TypeError, AttributeError):
+        return today_et()
+
+
+def detect_swing_closes(still_open, seen, out_dates=None):
+    """Realized P&L for any position opened on a PRIOR day that is now closed.
+
+    Same-day fill matching can never catch these: the buy fill is from an
+    earlier session, so today's order list only shows the sell side. Applies
+    to day-module positions that overstayed as well as genuine swings.
     Returns {symbol: realized_pnl_pct}."""
     closes = {}
+    if out_dates is None:
+        out_dates = {}
     if not os.path.exists("logs/trade_log.csv"):
         return closes
     with open("logs/trade_log.csv", newline="") as f:
@@ -118,7 +133,15 @@ def detect_swing_closes(still_open, seen):
             sym = r.get("symbol", "")
             if r.get("skipped") in ("True", "true") or not r.get("order_id"):
                 continue
-            if r.get("time_in_force") != "gtc" and r.get("module") != "SWING_CATALYST":
+            # v2.1 FIX: this used to require gtc / SWING_CATALYST, which meant
+            # a DAY_MOMENTUM position that survived past its entry date could
+            # NEVER have its exit recorded. Those are exactly the positions
+            # that go wrong (see the 2026-08 stranded inventory), so they are
+            # the ones whose realized P&L matters most. Any position whose
+            # entry date is in the past and which is no longer open is now a
+            # candidate for exit reconstruction.
+            entry_date = r.get("date", "")
+            if not entry_date or entry_date >= today_et():
                 continue
             if sym in still_open:
                 continue  # still holding — nothing realized yet
@@ -134,6 +157,8 @@ def detect_swing_closes(still_open, seen):
                 for leg in parent.get("legs") or []:
                     if leg.get("side") == "sell" and leg.get("filled_avg_price"):
                         sell_px = float(leg["filled_avg_price"])
+                        if leg.get("filled_at"):
+                            out_dates[sym] = _et_day(leg["filled_at"])
                 # Fallback: EOD flatten / midday close CANCELS the bracket legs
                 # and exits via a separate market sell — find that fill instead.
                 if buy_px and not sell_px:
@@ -152,6 +177,8 @@ def detect_swing_closes(still_open, seen):
                             q = float(o.get("filled_qty") or 0)
                             sold_val += float(o["filled_avg_price"]) * q
                             sold_qty += q
+                            if o.get("filled_at"):
+                                out_dates[sym] = _et_day(o["filled_at"])
                     if sold_qty and (not qty_needed or sold_qty >= qty_needed):
                         sell_px = sold_val / sold_qty
                 if buy_px and sell_px:
@@ -192,8 +219,14 @@ def main():
 
     decision_row = load_todays_decision()
     if decision_row is None:
-        print("No decision logged for today; nothing to record.")
-        return
+        # v2.1 FIX: this used to `return`. That is why six closed trades have
+        # no realized P&L in the ledger — they exited on days when no new
+        # decision was logged (2026-08-06 liquidated four positions and
+        # recorded nothing). Exits happen independently of new decisions, so
+        # the recorder now continues with an empty decision set and still
+        # reconstructs closes.
+        print("No decision logged for today — continuing to record exits only.")
+        decision_row = {"decision": {}}
 
     decision = decision_row.get("decision", {})
     taken = {t["symbol"]: t for t in decision.get("trades", [])}
@@ -212,19 +245,25 @@ def main():
             w.writeheader()
 
         still_open = open_position_symbols()
-        fills = {**detect_swing_closes(still_open, seen), **fills}
+        close_dates = {}
+        fills = {**detect_swing_closes(still_open, seen, close_dates), **fills}
 
         # v2: swing positions closed today from PRIOR days' decisions — record
         # their realized round trips (today's decision won't contain them).
         for sym, pnl in fills.items():
-            if sym not in taken and sym not in still_open \
-               and (today_et(), sym, "SWING_CLOSED") not in seen:
+            # De-dupe on symbol across ALL dates: a close backfilled with its
+            # true exit date would otherwise be re-recorded every evening,
+            # because the old guard only checked today's date.
+            already = any(s == sym and a == "SWING_CLOSED" for (_, s, a) in seen)
+            if sym not in taken and sym not in still_open and not already:
                 w.writerow({
-                    "date": today_et(), "symbol": sym, "action": "SWING_CLOSED",
+                    "date": close_dates.get(sym, today_et()),
+                    "symbol": sym, "action": "SWING_CLOSED",
                     "conviction": "", "catalyst_type": "", "reject_reason": "",
                     "open_to_close_pct": "", "realized_pnl_pct": pnl,
                 })
-                print(f"SWING_CLOSED {sym:6s} realized {pnl}%")
+                print(f"SWING_CLOSED {sym:6s} realized {pnl}% "
+                      f"(exit {close_dates.get(sym, today_et())})")
 
         for sym, t in taken.items():
             action = "OPEN_SWING" if sym in still_open else "TAKEN"
@@ -257,6 +296,12 @@ def main():
             print(f"REJECTED {sym:6s} open->close {oc}%  ({r.get('reason', '')[:60]})")
 
     print(f"\nOutcomes appended to {OUTCOMES_CSV}")
+    try:
+        import health
+        health.mark("evening", "OK",
+                    f"{len(taken)} taken / {len(rejected)} rejected / {len(fills)} exit(s) reconstructed")
+    except Exception as e:  # noqa: BLE001
+        print(f"health mark failed (ignored): {e}")
 
 
 if __name__ == "__main__":

@@ -13,11 +13,14 @@ Idempotent: with nothing open it does nothing. Logged to logs/eod.jsonl.
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import config
 import executor
+import health
+import protection_check
 import trade_logger
 
 EOD_LOG = "logs/eod.jsonl"
@@ -27,12 +30,14 @@ ET = ZoneInfo("America/New_York")
 def main():
     if not getattr(config, "EOD_FLATTEN_ENABLED", True):
         print("EOD flatten disabled in config.")
+        health.mark("eod", "SKIPPED", "EOD_FLATTEN_ENABLED is False in config")
         return
 
     try:
         positions = executor.get_open_positions()
     except Exception as e:  # noqa: BLE001
         print(f"Could not read positions: {e}")
+        health.mark("eod", "ERROR", f"could not read positions: {e}")
         raise
 
     closed = []
@@ -40,7 +45,11 @@ def main():
         for p in positions:
             sym = p["symbol"]
             try:
-                executor.close_position(sym)  # cancels child orders too
+                # Cancel working sells first, THEN close. close_position with
+                # cancel_orders=true has raced against its own child orders
+                # before, leaving a cancelled stop and a live position.
+                protection_check.cancel_sell_orders(sym)
+                executor.close_position(sym)
                 closed.append({
                     "symbol": sym,
                     "qty": p.get("qty"),
@@ -78,7 +87,44 @@ def main():
             "flattened": closed,
         }) + "\n")
 
-    print(f"\nEOD flatten complete — {len(closed)} position(s) closed. Flat overnight.")
+    # Verify, then escalate. "I sent the close" is not "the position is gone",
+    # and an unnoticed failure here is what stranded three positions for weeks.
+    failures = [c for c in closed if c.get("error")]
+    leftover = []
+    try:
+        leftover = executor.get_open_positions()
+    except Exception as e:  # noqa: BLE001
+        print(f"Post-flatten verification failed: {e}")
+
+    if leftover:
+        print(f"STILL OPEN after per-symbol close: {[p['symbol'] for p in leftover]} "
+              f"— escalating to flatten_all()")
+        try:
+            executor.flatten_all()
+            time.sleep(2)
+            leftover = executor.get_open_positions()
+        except Exception as e:  # noqa: BLE001
+            print(f"flatten_all() failed: {e}")
+
+    if leftover:
+        # Last line of defence: if we cannot close it, at least protect it,
+        # so tomorrow's heat calculation sees a real stop instead of the 8%
+        # ceiling and the morning run is not locked out.
+        print("Could not flatten everything — arming protective stops instead.")
+        try:
+            protection_check.check()
+        except Exception as e:  # noqa: BLE001
+            print(f"Protective re-arm failed: {e}")
+        health.mark("eod", "ERROR",
+                    f"{len(leftover)} position(s) still open after flatten: "
+                    f"{[p['symbol'] for p in leftover]}")
+    elif failures:
+        health.mark("eod", "ERROR", f"{len(failures)} close error(s), account now flat")
+    else:
+        health.mark("eod", "OK", f"{len(closed)} position(s) closed, account flat")
+
+    print(f"\nEOD flatten complete — {len(closed)} position(s) closed, "
+          f"{len(leftover)} still open.")
 
 
 if __name__ == "__main__":

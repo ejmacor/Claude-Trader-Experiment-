@@ -30,6 +30,8 @@ import anthropic
 
 import config
 import executor
+import health
+import protection_check
 import scanner  # reuse news fetch + retry helper
 import trade_logger
 
@@ -92,6 +94,19 @@ def age_in_days(entry_date):
         return 0
 
 
+def _safe_close(symbol):
+    """Cancel working sell orders, THEN close.
+
+    This ordering is why the midday manager was safe to re-enable. A bare
+    close_position(symbol) has raced against its own bracket child orders —
+    the cancel lands, the close does not, and the position is left naked
+    with its protective stop gone. That failure mode is what took the
+    midday and EOD jobs offline on 2026-07-16.
+    """
+    protection_check.cancel_sell_orders(symbol)
+    return executor.close_position(symbol)
+
+
 def main():
     if not config.MIDDAY_ENABLED:
         print("Midday session disabled in config.")
@@ -107,6 +122,10 @@ def main():
     positions = executor.get_open_positions()
     if not positions:
         print("No open positions — nothing to manage.")
+        # Report even on a no-op run. midday.jsonl going quiet used to be
+        # ambiguous: "flat account" and "workflow not running" looked
+        # identical from the logs. They no longer do.
+        health.mark("midday", "OK", "no open positions")
         return
 
     ctx = entry_context()
@@ -136,13 +155,13 @@ def main():
 
         # R3 — swing time stop
         if is_swing and age_in_days(meta.get("entry_date", "")) >= config.SWING_MAX_HOLD_DAYS:
-            executor.close_position(sym)
+            _safe_close(sym)
             actions.append({**pos, "action": "CLOSE", "rule": "TIME_STOP",
                             "reason": f"swing hold reached {config.SWING_MAX_HOLD_DAYS} days"})
             continue
         # R1 — cut failing trades before the stop
         if r_multiple <= config.MIDDAY_CUT_THRESHOLD_R:
-            executor.close_position(sym)
+            _safe_close(sym)
             actions.append({**pos, "action": "CLOSE", "rule": "MIDDAY_CUT",
                             "reason": f"{r_multiple:.2f}R by midday — thesis failing"})
             continue
@@ -178,11 +197,13 @@ def main():
             v = verdicts.get(pos["symbol"], {"action": "HOLD", "reason": "no verdict — default hold"})
             if v.get("action") == "CLOSE":
                 try:
-                    executor.close_position(pos["symbol"])
+                    _safe_close(pos["symbol"])
                 except Exception as e:  # noqa: BLE001
                     v["reason"] += f" (close failed: {e})"
             actions.append({**pos, "action": v.get("action", "HOLD"),
                             "rule": "CLAUDE_JUDGMENT", "reason": v.get("reason", "")})
+
+    health.mark("midday", "OK", f"{len(actions)} action(s) on {len(positions)} position(s)")
 
     os.makedirs("logs", exist_ok=True)
     with open(MIDDAY_LOG, "a") as f:

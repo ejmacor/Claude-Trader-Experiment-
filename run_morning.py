@@ -16,6 +16,8 @@ import benchmark
 import challenger
 import config
 import executor
+import health
+import preflight
 import regime as regime_mod
 import scanner
 import shadow_gate
@@ -55,34 +57,73 @@ def main():
     print(f"CLAUDE TRADER v{config.CONFIG_VERSION} — morning run")
     print("=" * 60)
 
+    health.mark("morning", "OK", "run started")
+
     # 0a. Duplicate-run guard
     if already_ran_today():
         print("Orders already submitted today — duplicate run detected. Exiting.")
+        health.mark("scan", "SKIPPED", "duplicate run guard — orders already placed today")
         sys.exit(0)
 
     # 0b. Regime first — it feeds both guardrails and the analyst
-    print("\n[1/5] Classifying market regime...")
+    print("\n[1/6] Classifying market regime...")
     regime = regime_mod.classify()
     print(f"      {regime['regime']} (risk x{regime['risk_mult']}) | {regime['detail']}")
 
-    # 0c. Risk guardrails
+    # 0c. PREFLIGHT — remediation BEFORE judgement.
+    #
+    # This ordering is deliberate and it is the fix for the 2026-08-12
+    # deadlock. Guardrails used to run first and exit on failure, which meant
+    # stale unprotected positions inflated portfolio heat, heat tripped the
+    # guardrail, and the guardrail exited before any code that could have
+    # cleaned up those positions. The system could not reach its own remedy.
+    #
+    # Preflight re-arms missing stops and closes positions that outlived
+    # their hold. It relaxes NO risk parameter — guardrails below still have
+    # absolute veto over new trades.
+    print("\n[2/6] Preflight: protective stops and stale inventory...")
+    try:
+        pre = preflight.run()
+        print(f"      {pre.get('summary', 'preflight complete')}")
+    except Exception as e:  # noqa: BLE001 — preflight must never kill the run
+        print(f"      Preflight error (continuing to guardrails): {e}")
+        health.mark("preflight", "ERROR", str(e))
+
+    # 0d. Benchmark BEFORE the guardrail exit. benchmark.csv froze on
+    # 2026-08-11 for the same reason the scanner did — it was logged after the
+    # analyst, so a halt took the SPY comparison line down with it. The
+    # benchmark is market data; it has nothing to do with whether we may trade.
+    try:
+        benchmark.log_spy()
+    except Exception as e:  # noqa: BLE001
+        print(f"      Benchmark log error (ignored): {e}")
+
+    # 0e. Risk guardrails — evaluated AFTER remediation, on a truthful account
     account = executor.get_account()
     ok, reason = executor.guardrails_pass(account, regime)
     trade_logger.log_equity(account)
     if not ok:
         print(f"HALTED, no trades today: {reason}")
+        # A halt is a real outcome, not silence. Recording it here is what
+        # lets the dashboard and the weekly review know the difference
+        # between "looked and found nothing" and "never looked".
+        health.mark("scan", "HALTED", reason)
+        health.mark("execute", "HALTED", reason)
         sys.exit(0)
 
     # 1. Scan
-    print("\n[2/5] Scanning pre-market gappers...")
+    print("\n[3/6] Scanning pre-market gappers...")
     candidates = scanner.build_candidates()
     print(f"      {len(candidates)} candidates with catalysts")
+    # The scanner ran. Zero candidates is a legitimate result and reports OK;
+    # only never reaching this line is a failure.
+    health.mark("scan", "OK", f"{len(candidates)} candidate(s) after filters")
     for c in candidates:
         t = c["technicals"]
         print(f"      {c['symbol']:6s} +{c['gap_pct']}% | rvol {t['relative_volume']} | atr {t['atr_pct']}% | {c['news'][0]['headline'][:60]}")
 
     # 2. Analyze
-    print("\n[3/5] Claude catalyst analysis...")
+    print("\n[4/6] Claude catalyst analysis...")
     decision = analyst.analyze(candidates, regime)
     print(f"      Market note: {decision.get('market_note', '')}")
     print(f"      Trades proposed: {len(decision['trades'])}")
@@ -119,14 +160,8 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"      Challenger error (ignored): {e}")
 
-    # 2d. Benchmark
-    try:
-        benchmark.log_spy()
-    except Exception as e:  # noqa: BLE001
-        print(f"      Benchmark log error (ignored): {e}")
-
     # 3. Execute
-    print("\n[4/5] Placing ATR bracket orders (PAPER)...")
+    print("\n[5/6] Placing ATR bracket orders (PAPER)...")
     by_symbol = {c["symbol"]: c for c in candidates}
     for trade in decision["trades"]:
         sym = trade["symbol"]
@@ -150,7 +185,11 @@ def main():
              + ("" if execution.get("verified") else " | UNVERIFIED"))
         print(f"      {sym:6s} score {trade.get('setup_score')}/10 -> {status}")
 
-    print("\n[5/5] Run complete. Day-only mode: the 3:50pm ET flatten job guarantees no overnight positions.")
+    placed = sum(1 for t in decision["trades"] if t.get("symbol"))
+    health.mark("execute", "OK", f"{placed} trade(s) processed from {len(candidates)} candidate(s)")
+
+    print("\n[6/6] Run complete. Day-only mode: the 3:50pm ET flatten job is the"
+          " primary no-overnight guarantee; preflight is the backstop if it fails.")
 
 
 if __name__ == "__main__":
