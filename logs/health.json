@@ -1,0 +1,13 @@
+{
+  "updated": "2026-09-01T22:06:43.005885+00:00",
+  "stages": {
+    "eod": {
+      "status": "ERROR",
+      "detail": "1 position(s) still open after flatten: ['NTRA']",
+      "last_run": "2026-09-01T22:06:43.005851+00:00",
+      "last_run_date_et": "2026-09-01",
+      "last_ok": null
+    }
+  },
+  "first_seen": "2026-09-01T22:06:43.005888+00:00"
+}
