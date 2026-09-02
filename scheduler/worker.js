@@ -2,85 +2,112 @@
  * claude-trader-scheduler — Cloudflare Worker
  *
  * WHY THIS EXISTS
- * GitHub Actions cron is best-effort and on this repo it has been landing
- * 2-5 hours late, every workflow, every day:
+ * GitHub Actions cron is best-effort and on this repo it landed 2-5 hours late,
+ * every workflow, every day:
  *
  *   morning    scheduled 12:10 UTC   executed 16:41 UTC   +4h16m
  *   preflight  scheduled 12:10 UTC   executed 17:17 UTC   +4h52m
  *   eod        scheduled 19:50 UTC   executed 22:07 UTC   +2h09m
  *
- * A "morning" scanner that runs at 12:41pm ET is screening pre-market gaps
- * four hours after the open, and an EOD flatten that arrives at 6pm is two
- * hours after the day-TIF brackets already expired. Cloudflare cron triggers
- * fire within seconds, so this Worker becomes the clock and GitHub becomes
- * the executor.
+ * A "morning" scanner running at 12:41pm ET screens pre-market gaps four hours
+ * after the open, and an EOD flatten arriving at 6pm is two hours after the
+ * day-TIF brackets already expired. Cloudflare cron fires within seconds, so
+ * this Worker becomes the clock and GitHub becomes the executor.
+ *
+ * ONE TRIGGER, NOT SEVEN
+ * Cloudflare caps Cron Triggers at 3 per Worker on the free plan (5 on paid).
+ * Seven separate triggers will not deploy. So this uses a single every-10-
+ * minutes trigger and branches on the UTC clock inside. Every dispatch time
+ * below lands on a :10 boundary, so the tick hits all of them exactly.
  *
  * The workflows keep their own cron blocks as a fallback. Double-firing is
- * harmless: the duplicate-run guard in run_morning.py makes a second morning
- * run a no-op, and eod/preflight are idempotent.
+ * harmless: the duplicate-run guard makes a second morning run a no-op, and
+ * preflight/eod are idempotent.
  */
 
 const OWNER = "ejmacor";
 const REPO = "Claude-Trader-Experiment-";
 
-// UTC cron -> workflow file. Times are EDT-based; see the DST note in README.
-const SCHEDULE = {
-  "10 12 * * 1-5": "morning-run.yml",     //  8:10am ET  scan + enter
-  "40 13 * * 1-5": "position-sweep.yml",  //  9:40am ET  stale-position sweep
-  "40 16 * * 1-5": "midday-manage.yml",   // 12:40pm ET  manage open positions
-  "50 19 * * 1-5": "eod-flatten.yml",     //  3:50pm ET  flatten before the close
-  "10 21 * * 1-5": "evening-review.yml",  //  5:10pm ET  outcomes + review
-  "30 22 * * 1-5": "watchdog.yml",        //  6:30pm ET  health check
-  "40 21 * * 5":   "weekly-review.yml",   //  5:40pm ET Friday
-};
+// UTC "HH:MM" -> workflow file. Times are EDT-based; see the DST note below.
+// dow: 1-5 = Mon-Fri, 5 = Friday only.
+const JOBS = [
+  { at: "12:10", dow: [1, 2, 3, 4, 5], wf: "morning-run.yml",    et: "8:10am" },
+  { at: "13:40", dow: [1, 2, 3, 4, 5], wf: "position-sweep.yml", et: "9:40am" },
+  { at: "16:40", dow: [1, 2, 3, 4, 5], wf: "midday-manage.yml",  et: "12:40pm" },
+  { at: "19:50", dow: [1, 2, 3, 4, 5], wf: "eod-flatten.yml",    et: "3:50pm" },
+  { at: "21:10", dow: [1, 2, 3, 4, 5], wf: "evening-review.yml", et: "5:10pm" },
+  { at: "21:40", dow: [5],             wf: "weekly-review.yml",  et: "5:40pm Fri" },
+  { at: "22:30", dow: [1, 2, 3, 4, 5], wf: "watchdog.yml",       et: "6:30pm" },
+];
 
-async function dispatch(env, workflow) {
-  const res = await fetch(
-    `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${workflow}/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "claude-trader-scheduler",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ref: "main" }),
+const WORKFLOWS = new Set(JOBS.map(j => j.wf));
+
+async function dispatch(env, workflow, attempts = 3) {
+  let last = null;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${workflow}/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "claude-trader-scheduler",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ref: "main" }),
+        }
+      );
+      // 204 No Content is success for this endpoint.
+      if (res.status === 204) {
+        console.log(`[scheduler] ${workflow} dispatched (attempt ${i})`);
+        return { workflow, status: 204, ok: true, attempts: i };
+      }
+      last = { workflow, status: res.status, ok: false, body: await res.text() };
+      console.log(`[scheduler] ${workflow} attempt ${i} -> ${res.status}: ${last.body}`);
+      // 4xx other than rate limiting will not fix themselves; stop retrying.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
+    } catch (e) {
+      last = { workflow, status: 0, ok: false, body: String(e) };
+      console.log(`[scheduler] ${workflow} attempt ${i} threw: ${e}`);
     }
-  );
-  // 204 No Content is success for this endpoint.
-  const ok = res.status === 204;
-  const body = ok ? "" : await res.text();
-  console.log(
-    `[scheduler] ${workflow} -> ${res.status}${ok ? " dispatched" : " FAILED: " + body}`
-  );
-  return { workflow, status: res.status, ok, body };
+    // Cloudflare does not retry a failed scheduled invocation, so retry here.
+    if (i < attempts) await new Promise(r => setTimeout(r, 1500 * i));
+  }
+  return last || { workflow, status: 0, ok: false, body: "no attempt made" };
+}
+
+/** Which job, if any, is due at this UTC instant. Exported shape for testing. */
+export function jobFor(date) {
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+  const now = `${hh}:${mm}`;
+  const dow = date.getUTCDay(); // 0=Sun .. 6=Sat
+  return JOBS.find(j => j.at === now && j.dow.includes(dow)) || null;
 }
 
 export default {
   async scheduled(event, env, ctx) {
-    const workflow = SCHEDULE[event.cron];
-    if (!workflow) {
-      console.log(`[scheduler] no workflow mapped to cron ${event.cron}`);
-      return;
-    }
-    ctx.waitUntil(dispatch(env, workflow));
+    const job = jobFor(new Date(event.scheduledTime));
+    if (!job) return; // ordinary tick, nothing due
+    console.log(`[scheduler] ${job.at} UTC (${job.et} ET) -> ${job.wf}`);
+    ctx.waitUntil(dispatch(env, job.wf));
   },
 
-  // Manual trigger + health check:
-  //   curl https://<worker>/                     -> shows the schedule
-  //   curl -X POST https://<worker>/run/morning-run.yml?key=<TRIGGER_KEY>
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
+      const now = new Date();
       return Response.json({
         service: "claude-trader-scheduler",
         repo: `${OWNER}/${REPO}`,
-        schedule: SCHEDULE,
-        now_utc: new Date().toISOString(),
-      });
+        now_utc: now.toISOString(),
+        next_due: jobFor(now),
+        jobs: JOBS,
+      }, { headers: { "cache-control": "no-store" } });
     }
 
     const m = url.pathname.match(/^\/run\/([A-Za-z0-9._-]+\.yml)$/);
@@ -88,7 +115,7 @@ export default {
       if (!env.TRIGGER_KEY || url.searchParams.get("key") !== env.TRIGGER_KEY) {
         return new Response("unauthorized", { status: 401 });
       }
-      if (!Object.values(SCHEDULE).includes(m[1])) {
+      if (!WORKFLOWS.has(m[1])) {
         return new Response(`unknown workflow: ${m[1]}`, { status: 400 });
       }
       const r = await dispatch(env, m[1]);
