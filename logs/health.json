@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-02T19:28:47.145730+00:00",
+  "updated": "2026-09-02T19:56:50.776219+00:00",
   "stages": {
     "eod": {
       "status": "ERROR",
@@ -18,21 +18,21 @@
     "morning": {
       "status": "OK",
       "detail": "run started",
-      "last_run": "2026-09-02T16:41:26.136675+00:00",
+      "last_run": "2026-09-02T19:56:44.972992+00:00",
       "last_run_date_et": "2026-09-02",
       "last_ok": "2026-09-02"
     },
     "scan": {
-      "status": "SKIPPED",
-      "detail": "duplicate run guard \u2014 orders already placed today",
-      "last_run": "2026-09-02T16:41:26.255859+00:00",
+      "status": "LATE",
+      "detail": "run started 15:56 ET, past the 10:30 entry cutoff \u2014 the pre-market screen is stale; no new entries",
+      "last_run": "2026-09-02T19:56:50.775967+00:00",
       "last_run_date_et": "2026-09-02",
       "last_ok": null
     },
     "preflight": {
       "status": "OK",
-      "detail": "0 stop(s) re-armed, 1 stale position(s) closed",
-      "last_run": "2026-09-02T17:17:56.791314+00:00",
+      "detail": "0 stop(s) re-armed, 0 stale position(s) closed",
+      "last_run": "2026-09-02T19:56:46.514791+00:00",
       "last_run_date_et": "2026-09-02",
       "last_ok": "2026-09-02"
     },
@@ -42,6 +42,13 @@
       "last_run": "2026-09-02T19:28:47.145683+00:00",
       "last_run_date_et": "2026-09-02",
       "last_ok": "2026-09-02"
+    },
+    "execute": {
+      "status": "LATE",
+      "detail": "run started 15:56 ET, past the 10:30 entry cutoff \u2014 the pre-market screen is stale; no new entries",
+      "last_run": "2026-09-02T19:56:50.776210+00:00",
+      "last_run_date_et": "2026-09-02",
+      "last_ok": null
     }
   },
   "first_seen": "2026-09-01T22:06:43.005888+00:00"
