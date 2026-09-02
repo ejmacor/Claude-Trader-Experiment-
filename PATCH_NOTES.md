@@ -1,105 +1,98 @@
-# Claude Trader — benchmark fix, 2026-09-02
+# Claude Trader — verdict tape staleness, 2026-09-02
 
-Three files. Drop into `dev/`, overwrite, commit, push.
-
-```
-benchmark.py    run_morning.py    selftest.py
-```
-
-Applies on top of the FINAL package. `analyst.py`, `outcomes.py`, `executor.py`,
-`health.py` and `index.html` from that zip are unchanged — keep them.
-`selftest.py` is in both; this version is newer (adds section [9]).
-
----
-
-## What was wrong
-
-`logs/benchmark.csv` stops at 2026-08-11. Two independent causes, both fixed.
-
-**1. No code in the repo could fill a gap.** `log_spy()` called
-`/v2/stocks/SPY/bars/latest` — one bar, today. There was no range fetch
-anywhere. Once a row was missed it was missed permanently, and the only way to
-repair it was by hand.
-
-**2. The write sat behind an early exit.** It was at step 0d, deliberately ahead
-of the guardrail exit (the comment at line 92 says so). But the duplicate-run
-guard exits at 0a, above it. Every morning that tripped the guard from Aug 12
-onward also skipped the benchmark write.
-
-## What changed
-
-**`benchmark.py`** — rewritten.
-
-- `fetch_range(start, end)` — SPY daily bars over a window, paginated. Non-trading days simply don't come back, so no synthetic rows.
-- `backfill(start, end, dry_run)` — merges a window in. Never overwrites an existing row; a backfill repairs history, it doesn't rewrite it. With no window it runs from the last logged row to today.
-- `write_rows()` — rewrites the file sorted by date. Required once backfilling exists: the dashboard plots in file order, so an appended 08-12 landing after 08-11 would make the SPY line zigzag backwards.
-- `gaps(through=None)` — scans from the first row **through today**, not to the last row. The hole here is a trailing one and a first-to-last scan is blind to exactly that shape.
-- CLI: `--backfill [START END]`, `--dry-run`, `--check`.
-
-**`run_morning.py`** — benchmark moved to step 0a, ahead of every `sys.exit()` in
-the function (verified: benchmark at line 117, first exit at line 140). It now
-also self-heals — if `gaps()` finds missing rows it backfills before logging
-today, so a future outage closes itself instead of leaving a permanent hole.
-
-**`selftest.py`** — new section [9], eight checks. Full suite is now **42 PASS**.
-
----
-
-## What your file actually looks like
+Two files:
 
 ```
-rows: 17   first: 2026-07-06   last: 2026-08-11
-weekday gaps: 26
-  interior (10): 2026-07-14, 2026-07-27..31, 2026-08-03..06
-  trailing (16): 2026-08-12 .. 2026-09-02
+index.html    selftest.py
 ```
 
-The trailing 16 is the outage we already knew about. **The interior 10 is new
-information** — the morning run was already missing days in late July and early
-August, before the duplicate-guard lockout started. Whatever was wrong began
-earlier and more intermittently than the Aug 12 story suggests. Worth a look
-before the day-91 writeup.
+Applies on top of everything already pushed. Both are newer versions of files
+you have; overwrite them. Nothing else changes.
 
 ---
 
-## Deploy
+## Why FRMI is still at the top
 
-1. Unzip over `dev/`, overwrite the three files.
-2. `python selftest.py` — expect **42 PASS**.
-3. Dry run first, to see what it would pull without writing:
-   ```
-   python benchmark.py --backfill --dry-run
-   ```
-4. If the dates look right:
-   ```
-   python benchmark.py --backfill
-   python benchmark.py --check
-   ```
-   `--check` should report 0 gaps, or only market holidays.
-5. Commit and push. The SPY line will run to today.
+It isn't a bug in the tape. `logs/decisions.jsonl` has 21 entries and the newest
+is **2026-08-11**. The tape shows the newest verdict on file, and that verdict is
+FRMI. There has been no verdict since, because the scanner was locked out by the
+duplicate-run guard from Aug 12 until you deployed the fix today.
 
-Step 3 needs live Alpaca credentials in your shell, same as any other script
-here. If you'd rather not run it locally, pushing alone is enough — the next
-morning run detects the gaps and backfills on its own.
+Confirmed live on `main` — every patch is deployed:
 
----
+```
+run_morning.py   benchmark-first: YES
+benchmark.py     backfill: YES
+analyst.py       module-block: YES
+outcomes.py      logged-module: YES
+index.html       module-driven ledger: YES
+```
 
-## Verified before packaging
+The current `logs/health.json` still shows `scan SKIPPED — "duplicate run guard —
+orders already placed today"`. Note the wording: that's the **old** string. The
+patched code writes `"entry orders already placed today"`. So that entry is from
+this morning's 16:41 UTC run, which used the pre-deploy code. No morning run has
+executed since you pushed.
 
-- `benchmark.py`, `run_morning.py`, `selftest.py` — `ast.parse` clean; all 20 modules compile and import
-- Backfill exercised with a stubbed feed: merge, sort, no-overwrite, no duplicates, single header, dry-run writes nothing, re-run is a no-op
-- `gaps()` run against your real `benchmark.csv` — found the trailing hole the old first-to-last logic missed
-- Benchmark call confirmed ahead of every `sys.exit()` in `run_morning.main()`
-- Dashboard re-rendered in jsdom against real logs — no regression
+Next scheduled run is **12:10 UTC tomorrow (8:10am ET)**. That's when the tape
+gets a new verdict. Nothing to fix to make that happen.
 
 ---
 
-## Still open
+## What actually needed fixing
 
-EOD flatten still lands 6–7pm ET against a 3:50pm cron. Unchanged.
+`LATEST VERDICT — TUE, AUG 11` rendered identically whether that was today or
+three weeks ago. Literally true, completely misleading. FRMI read as the current
+pick for three weeks while the scanner produced nothing, and the only honest
+signal was the small `asOf` line in the header, far from the tape.
 
-One caution if you want the `run_eod.py` version of that fix: if EOD runs late
-*every* day, marking it ERROR every day gives you a permanently red banner —
-which is the same crying-wolf failure as the stale selftest assertion. The right
-shape is a distinct "ran late" detail that's visible without reading as a halt.
-Tell me which and I'll build it that way.
+Same failure as the health banner and the trade ledger: a panel presenting old
+data as current.
+
+The tape now marks itself when the newest verdict is more than one trading day
+old:
+
+- Amber badge on the eyebrow: `stale · 16 trading days ago · no verdict since`
+- Verdict text dimmed to 62%, candidate chips to 55%
+- A dashed amber chip appended: *not today's screen — the scanner has not produced a verdict since Tue, Aug 11*
+
+Rendered against your real `decisions.jsonl`:
+
+```
+date : LATEST VERDICT — TUE, AUG 11 stale · 16 trading days ago · no verdict since
+chips: ✓ FRMI gap +18.1%  ·  not today's screen — the scanner has not
+       produced a verdict since Tue, Aug 11
+tape class: wrap tape-inner is-stale
+```
+
+Once tomorrow's run writes a fresh verdict the badge disappears on its own.
+
+`selftest.py` gains section [10] — four checks mirroring the staleness threshold
+so the dashboard and the suite can't drift apart. **Full suite: 46 PASS.**
+
+---
+
+## Verified
+
+- `index.html` script block — `node --check` clean
+- Rendered in jsdom against real `decisions.jsonl`; badge, dimming and `is-stale` class all applied
+- `selftest.py` — 46 PASS
+- Live `main` inspected file by file to confirm every prior patch is deployed
+
+---
+
+## Tomorrow morning, what to look for
+
+1. Tape shows a new date with no stale badge.
+2. `health.json` → `scan` reads `OK` with a candidate count, not `SKIPPED`.
+   If it does say SKIPPED, check the wording — `"entry orders already placed
+   today"` means the new guard fired for a real reason; the old string would
+   mean the deploy didn't take.
+3. `benchmark.csv` gains rows and backfills the 26 missing weekdays.
+4. NTRA flips from `open · OVERSTAY` to a realized figure once the evening
+   review runs tonight.
+
+If you want to test the guard before then, `workflow_dispatch` on Morning
+Trading Run from the Actions tab will do it — but be aware that fires a real
+scan mid-session with a scanner built for the open, and it can place paper
+trades. Waiting for 8:10am is the cleaner test.

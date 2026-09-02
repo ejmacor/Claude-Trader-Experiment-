@@ -74,6 +74,13 @@ header{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;
 .tape-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--amber);text-transform:uppercase;margin-bottom:8px}
 .tape-note{font-family:var(--display);font-weight:700;font-stretch:125%;font-size:clamp(16px,2.4vw,22px);line-height:1.35;max-width:70ch}
 .tape-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+/* stale verdict: the tape must not present old picks as current */
+.stale-badge{display:inline-block;margin-left:10px;padding:2px 7px;border:1px solid var(--amber);
+  border-radius:3px;color:var(--amber);background:var(--amber-dim);letter-spacing:.08em;text-transform:none}
+#tape.is-stale .tape-note{opacity:.62}
+#tape.is-stale .tape-chips .chip:not(.stale-note){opacity:.55}
+.chip.stale-note{border-style:dashed;border-color:var(--amber);background:transparent}
+.chip.stale-note .g{color:var(--amber)}
 .chip{font-family:var(--mono);font-size:12px;padding:5px 10px;border:1px solid var(--line-strong);border-radius:4px;display:inline-flex;gap:8px;align-items:center;background:var(--panel)}
 .chip .g{color:var(--muted)}
 .chip.traded{border-color:rgba(47,191,113,.45);background:var(--green-dim)}
@@ -558,7 +565,17 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
     const {date,row} = decisions[0];
     const dec = row.decision || {};
     const tradedSet = new Set((dec.trades||[]).map(t=>t.symbol));
-    $("tapeDate").textContent = "LATEST VERDICT — " + prettyDate(date).toUpperCase();
+    /* A three-week-old verdict rendered exactly like today's. "LATEST VERDICT
+       — TUE, AUG 11" is literally true and completely misleading: FRMI read as
+       the current pick for three weeks while the scanner had not run once.
+       Same failure as the health banner — a panel showing old data must say
+       so, in the panel, not only in a small asOf line elsewhere. */
+    const verdictAge = tradingDaysSince(date);
+    $("tapeDate").innerHTML = "LATEST VERDICT — " + prettyDate(date).toUpperCase() +
+      (verdictAge > 1
+        ? ` <span class="stale-badge">stale · ${verdictAge} trading day${verdictAge===1?"":"s"} ago · no verdict since</span>`
+        : "");
+    $("tape").classList.toggle("is-stale", verdictAge > 1);
     $("tapeNote").textContent = dec.market_note || "No note recorded for this session.";
     const chips = (row.candidates_sent||[]).map(c=>{
       const traded = tradedSet.has(c.symbol);
@@ -570,7 +587,10 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
       const gapTxt = isFinite(gap) ? `gap ${gap >= 0 ? "+" : ""}${gap.toFixed(1)}%` : "gap n/a";
       return `<span class="chip ${traded?"traded":"rejected"}" title="premarket gap at scan time — not trade P&L"><span class="mark">${traded?"✓":"✗"}</span><span class="tk">${c.symbol}</span><span class="g">${gapTxt}</span></span>`;
     }).join("");
-    $("tapeChips").innerHTML = chips || `<span class="chip"><span class="g">No candidates passed the screen</span></span>`;
+    $("tapeChips").innerHTML = (chips || `<span class="chip"><span class="g">No candidates passed the screen</span></span>`) +
+      (verdictAge > 1
+        ? `<span class="chip stale-note"><span class="g">not today's screen — the scanner has not produced a verdict since ${prettyDate(date)}</span></span>`
+        : "");
   } else {
     $("tapeNote").textContent = "No verdicts on the wire yet. The first scheduled run prints here.";
   }

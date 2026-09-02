@@ -273,6 +273,20 @@ def main():
     finally:
         bm.fetch_range = _real_fetch
 
+    print("\n[10] Verdict tape staleness (dashboard logic, mirrored)")
+    # The tape rendered a 2026-08-11 verdict identically to a same-day one, so
+    # FRMI read as the current pick for three weeks while the scanner had not
+    # produced a single verdict. The dashboard now marks it; this mirrors the
+    # threshold so the two cannot silently drift apart.
+    check("a verdict from today is not stale",
+          health.trading_days_since("2026-09-02", today=date(2026, 9, 2)) > 1, False)
+    check("yesterday's verdict is not stale",
+          health.trading_days_since("2026-09-01", today=date(2026, 9, 2)) > 1, False)
+    check("a verdict from three weeks ago IS stale",
+          health.trading_days_since("2026-08-11", today=date(2026, 9, 2)) > 1, True)
+    check("stale age is counted in trading days, not calendar days",
+          health.trading_days_since("2026-08-11", today=date(2026, 9, 2)), 16)
+
     print()
     print("=" * 60)
     if FAILURES:
