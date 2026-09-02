@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-02T17:17:56.791340+00:00",
+  "updated": "2026-09-02T19:28:47.145730+00:00",
   "stages": {
     "eod": {
       "status": "ERROR",
@@ -33,6 +33,13 @@
       "status": "OK",
       "detail": "0 stop(s) re-armed, 1 stale position(s) closed",
       "last_run": "2026-09-02T17:17:56.791314+00:00",
+      "last_run_date_et": "2026-09-02",
+      "last_ok": "2026-09-02"
+    },
+    "midday": {
+      "status": "OK",
+      "detail": "no open positions",
+      "last_run": "2026-09-02T19:28:47.145683+00:00",
       "last_run_date_et": "2026-09-02",
       "last_ok": "2026-09-02"
     }
