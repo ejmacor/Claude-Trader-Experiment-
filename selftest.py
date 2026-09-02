@@ -391,6 +391,45 @@ def main():
     check("cutoff is before the pre-market screen goes stale mid-session",
           config.MAX_ENTRY_TIME_ET < "12:00", True)
 
+    print("\n[14] A blocked day still says something true about the market")
+    # The late path used to write "[ENGINE: no entries — past cutoff]" as the
+    # day's market note, and the guardrail-halt path wrote nothing to
+    # decisions.jsonl at all — leaving the verdict tape frozen on the last good
+    # day, which is precisely the state that hid the August outage. Both now
+    # log a real row led by live regime data.
+    try:
+        import run_morning as _rm
+    except ModuleNotFoundError as e:
+        print(f"  SKIP  run_morning import unavailable here ({e.name} not installed)")
+    else:
+        _reg = {"regime": "BULL_QUIET", "risk_mult": 1.0,
+                "detail": {"spy": 765.94, "sma50": 754.29, "sma200": 710.23,
+                           "realized_vol_20d_pct": 9.3}}
+        note = _rm.regime_note(_reg)
+        check("an unblocked note names the regime", "BULL_QUIET" in note, True)
+        check("an unblocked note carries live SPY levels", "765.94" in note, True)
+        check("an unblocked note carries realized vol", "9.3%" in note, True)
+        check("an unblocked note claims no halt", "No trades today" in note, False)
+
+        blocked = _rm.regime_note(_reg, "past the 10:30 entry cutoff", 3)
+        check("a blocked note still leads with the market read",
+              blocked.startswith("BULL_QUIET regime"), True)
+        check("a blocked note says how many were screened",
+              "3 candidate(s) screened" in blocked, True)
+        check("a blocked note gives the reason",
+              "past the 10:30 entry cutoff" in blocked, True)
+        check("the bare engine complaint is gone", "[ENGINE:" in blocked, False)
+
+        # Must never raise when the regime lookup itself failed.
+        check("a missing regime degrades instead of crashing",
+              _rm.regime_note(None, "past cutoff", 0).startswith("UNKNOWN regime"), True)
+
+        # Below-200d wording, so a BEAR tape is not described as constructive.
+        _bear = {"regime": "BEAR", "detail": {"spy": 600.0, "sma50": 700.0,
+                                              "sma200": 710.0, "realized_vol_20d_pct": 24.1}}
+        check("a bear tape is described as below its 200d SMA",
+              "below its 200d SMA" in _rm.regime_note(_bear), True)
+
     print()
     print("=" * 60)
     if FAILURES:

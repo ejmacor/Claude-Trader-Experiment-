@@ -95,6 +95,43 @@ def already_ran_today():
     return bool(entries)
 
 
+def regime_note(regime, blocked_reason="", screened=0):
+    """A one-line market read from LIVE regime data.
+
+    The late path used to write a bare engine complaint as the day's market
+    note, so the tape headline read "[ENGINE: no entries — past cutoff]" and
+    told the reader nothing about the market. That is honest but useless.
+
+    regime.classify() reads SPY's current price, its 50/200 SMAs and 20-day
+    realized vol — none of which depend on the stale pre-market gap screen. So
+    on a day the system cannot trade, it can still say something true and
+    current about the tape, and then say why it stood down.
+    """
+    d = (regime or {}).get("detail") or {}
+    name = (regime or {}).get("regime", "UNKNOWN")
+    spy, sma50, sma200 = d.get("spy"), d.get("sma50"), d.get("sma200")
+    vol = d.get("realized_vol_20d_pct")
+
+    bits = [f"{name} regime"]
+    if spy and sma50 and sma200:
+        if spy >= sma50 and spy >= sma200:
+            where = "SPY above both SMAs"
+        elif spy < sma200:
+            where = "SPY below its 200d SMA"
+        else:
+            where = "SPY above its 200d but below its 50d SMA"
+        bits.append(f"{where} ({spy:,.2f} vs {sma50:,.2f} / {sma200:,.2f})")
+    if vol is not None:
+        bits.append(f"realized vol {vol}%")
+    note = " with ".join([bits[0], ", ".join(bits[1:])]) if len(bits) > 1 else bits[0]
+
+    if blocked_reason:
+        screened_txt = (f"{screened} candidate(s) screened but not traded"
+                        if screened else "no entries")
+        note += f". No trades today — {screened_txt}: {blocked_reason}."
+    return note
+
+
 def main():
     print("=" * 60)
     print(f"CLAUDE TRADER v{config.CONFIG_VERSION} — morning run")
@@ -202,6 +239,15 @@ def main():
         # between "looked and found nothing" and "never looked".
         health.mark("scan", "HALTED", reason)
         health.mark("execute", "HALTED", reason)
+        # ...and the wire needs it too. health.json is for the watchdog; the
+        # DASHBOARD reads decisions.jsonl, and this path wrote nothing to it.
+        # A guardrail halt therefore left the verdict tape frozen on the last
+        # good day — exactly the state that hid the August outage. Same fix as
+        # the late path: a real row, leading with a real read of the tape.
+        trade_logger.log_decision([], {
+            "trades": [], "rejected": [],
+            "market_note": regime_note(regime, f"risk guardrail: {reason}"),
+        })
         sys.exit(0)
 
     # 1. Scan
@@ -216,10 +262,11 @@ def main():
         print(f"      {len(candidates)} candidate(s) screened but NOT traded — {late_reason}")
         # Signature is (candidates, decision). Writing a real decision row
         # matters: the wire must show that the scanner RAN and found N names
-        # but was blocked, not sit blank as if nothing happened.
+        # but was blocked, not sit blank as if nothing happened. The note
+        # leads with a genuine, current read of the tape — see regime_note().
         trade_logger.log_decision(candidates, {
             "trades": [], "rejected": [],
-            "market_note": f"[ENGINE: no entries — {late_reason}]",
+            "market_note": regime_note(regime, late_reason, len(candidates)),
         })
         sys.exit(0)
 
