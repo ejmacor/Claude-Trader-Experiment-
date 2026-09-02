@@ -1,0 +1,41 @@
+{
+  "updated": "2026-09-02T17:17:56.791340+00:00",
+  "stages": {
+    "eod": {
+      "status": "ERROR",
+      "detail": "1 position(s) still open after flatten: ['NTRA']",
+      "last_run": "2026-09-01T22:07:46.104625+00:00",
+      "last_run_date_et": "2026-09-01",
+      "last_ok": null
+    },
+    "evening": {
+      "status": "OK",
+      "detail": "0 taken / 0 rejected / 0 exit(s) reconstructed",
+      "last_run": "2026-09-02T00:59:39.036408+00:00",
+      "last_run_date_et": "2026-09-01",
+      "last_ok": "2026-09-01"
+    },
+    "morning": {
+      "status": "OK",
+      "detail": "run started",
+      "last_run": "2026-09-02T16:41:26.136675+00:00",
+      "last_run_date_et": "2026-09-02",
+      "last_ok": "2026-09-02"
+    },
+    "scan": {
+      "status": "SKIPPED",
+      "detail": "duplicate run guard \u2014 orders already placed today",
+      "last_run": "2026-09-02T16:41:26.255859+00:00",
+      "last_run_date_et": "2026-09-02",
+      "last_ok": null
+    },
+    "preflight": {
+      "status": "OK",
+      "detail": "0 stop(s) re-armed, 1 stale position(s) closed",
+      "last_run": "2026-09-02T17:17:56.791314+00:00",
+      "last_run_date_et": "2026-09-02",
+      "last_ok": "2026-09-02"
+    }
+  },
+  "first_seen": "2026-09-01T22:06:43.005888+00:00"
+}
