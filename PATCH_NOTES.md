@@ -1,104 +1,104 @@
-# Claude Trader — two fixes from the 2026-09-02 run, 2026-09-02
+# Claude Trader — journal panel off the GitHub API, 2026-09-02
 
 ```
-run_morning.py    index.html    selftest.py
+self_review.py    index.html    selftest.py    journal/index.json
 ```
 
-Overwrite in `dev/`, commit, push. Both bugs were found by watching the real
-run rather than by testing — worth saying, because both passed their tests.
+`journal/index.json` goes in `journal/`. It is generated and verified against
+the eight notes actually on `main`.
 
 ---
 
-## 1. `run_morning.py` — the benchmark self-heal only reached trailing gaps
+## Why it was empty, and why it came back
 
-The run detected 26 missing weekdays and filled 16. The other ten are still
-missing:
+The panel listed the folder via `api.github.com/repos/.../contents/journal` —
+the **unauthenticated** GitHub API, capped at **60 requests per hour per IP**.
+Every page load spent one.
 
-```
-2026-07-14, 2026-07-27..31, 2026-08-03..06
-```
+Past the cap it returns 403. The loader said:
 
-My wiring called `benchmark.gaps()`, which correctly found all 26, then called
-`benchmark.backfill()` **with no arguments** — and a no-arg backfill starts at
-`max(rows) + 1`. It can only ever close a hole that comes *after* the last row
-it already has. Every one of those ten sits before it.
-
-Verified against your live `benchmark.csv`:
-
-```
-gaps detected        10   earliest 2026-07-14  latest 2026-08-06
-no-arg backfill()    starts 2026-09-02+1  -> misses all 10
-backfill(start=...)  starts 2026-07-14    -> covers all 10
+```js
+if(!r.ok) return;   // folder doesn't exist yet — empty state stands
 ```
 
-`gaps()` already knows where the earliest hole is. It now gets passed. The next
-morning run closes the remaining ten on its own.
+So a rate-limit error rendered as **"No entries yet"**, identical to a genuinely
+empty folder. Eight notes were sitting in the repo the whole time. It loaded for
+you a few minutes later because the hourly window rolled over — nothing was
+fixed, and it will do the same thing again.
 
-## 2. `index.html` — no-trade days lumped three different things together
+Same failure class as the rest of today: a failure that renders as an
+innocuous empty state.
 
-The counter went 11 -> 12 after the run, under a subtitle reading "discipline,
-not absence". The 12th was not discipline — the scanner ran, screened, and the
-engine blocked entries past the cutoff.
+**It also took the brain map down.** `renderBrain(notes)` is called inside
+`loadJournal()` after the fetch, so when the listing failed the graph never
+drew at all. Not frozen — absent.
 
-A day with no trades is one of three things:
+## The fix
 
-1. the scanner ran, judged, and declined — **discipline**
-2. the scanner ran but the engine blocked it — **blocked** (late run, or a risk guardrail halt)
-3. the scanner never ran — **absence**
+`self_review.py` now writes `journal/index.json` after every review, and takes
+`--reindex` to build it on demand:
 
-Case 3 writes no decision row, so it can't be counted here; that's what the
-stale banner on the tape is for. Cases 1 and 2 both write rows and were
-indistinguishable. The engine now stamps its own blocks into `market_note`, so
-the dashboard keys off that:
-
-```
-NO-TRADE DAYS   12
-                11 by judgment · 1 blocked by the engine
+```json
+{ "generated": "...", "count": 8, "files": ["2026-07-03-launch.md", ...] }
 ```
 
-Rendered against your real `decisions.jsonl`. The subtitle only splits when
-there is something to split; a clean run still reads "discipline, not absence".
+The dashboard reads that from `raw.githubusercontent.com`, which is CDN-backed
+and uncapped. The API stays as a fallback — but its failure is now **reported**
+instead of swallowed:
 
-Conflating those two is precisely how three weeks of outage passed for
-discipline, so this one matters more than a label usually would.
+> **Journal couldn't load** — GitHub API rate limit reached (60/hour per IP)
+> and journal/index.json is missing. The notes are in the repo under /journal —
+> this panel could not list them.
 
-## 3. `index.html` — the trades subtitle, while I was in there
-
-`"ATR brackets · day + swing"` was hardcoded. It now reads counts off the trade
-log:
+Verified by rendering in jsdom with the API forced to 403:
 
 ```
-TRADES TAKEN   9
-               ATR brackets · 8 day, 1 swing
+=== ANALYST JOURNAL ===
+entries rendered: 8
+  2026-08-14-weekly-self-review
+  2026-08-07-weekly-self-review
+  2026-07-24-weekly-self-review
+  2026-07-17-weekly-self-review
 ```
 
-Which is the honest version: one swing from 2026-07-08, eight day trades, and
-swing disabled since 2026-07-10. The old label implied both modules were in
-service.
+Eight entries, newest first, with the API returning nothing.
 
-## selftest
+`write_index()` never raises — a disk error prints and returns `[]` rather than
+taking the weekly review down with it. Asserted in the suite.
 
-Sections [15] and [16], ten checks. [15] asserts the buggy no-arg call and the
-fixed one against a fixture with a real interior gap, so the difference is
-pinned rather than assumed. **Full suite: 91 PASS.**
+**Full suite: 98 PASS.**
+
+---
+
+## Separate issue: the Aug 14 review contains false premises
+
+Worth knowing before day 91. That entry says:
+
+> The 4% target was never touched and the 8% stop was never triggered.
+> The position is still open as a swing.
+
+Both are wrong, and the trade log says so:
+
+```
+2026-08-11,FRMI,...,module=DAY_MOMENTUM,time_in_force=day
+```
+
+- It was **not a swing.** `SWING_ENABLED` was False; the analyst's swing pick was silently demoted. The same entry even notes "full DAY_MOMENTUM sizing" two paragraphs later without reconciling the contradiction.
+- The stop was **not untriggered — it was cancelled.** A day-TIF bracket leg expires at the close. From Aug 12 the position had no stop at all.
+- The entry grades it "sound reasoning, weak execution context" on a +0.64% open-to-close. It closed at **-31.01%** on Sept 1.
+
+The reviewer wasn't wrong to reason as it did — it read the logs it was given,
+and those logs said `OPEN_SWING`. The mislabel propagated into the analysis.
+
+Nothing to patch. The journal is deliberately write-only and rewriting it would
+defeat that. But when you write the day-91 summary, the Aug 14 entry's read on
+FRMI needs a correction alongside it.
 
 ## Verified
 
-- Tree compiles, all modules import clean
-- `node --check` clean on the script block
-- Both fixes rendered in jsdom against your post-run `decisions.jsonl` and `benchmark.csv`
-- 91 PASS
-
----
-
-## Tomorrow morning
-
-If the Worker is deployed, the 8:10am run should give you:
-
-- `health.json` -> `scan: OK` with a candidate count (not `LATE`)
-- benchmark's last ten holes closed — `python benchmark.py --check` reports 0
-- a real analyst market note on the tape, not an engine line
-- no-trade subtitle back to plain "discipline, not absence" if it trades or declines on judgment
-
-If `scan` still says `LATE`, the pipeline is healthy and the Worker isn't
-firing — check the Cloudflare trigger list before anything else.
+- `self_review.py` — `ast.parse` clean; whole tree compiles
+- `index.html` — `node --check` clean
+- Rendered in jsdom with the GitHub API stubbed to 403: 8 entries, newest first
+- Error path rendered separately: reports the cause instead of the empty state
+- Every filename in `journal/index.json` confirmed to resolve on `main`
+- 98 PASS

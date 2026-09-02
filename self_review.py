@@ -16,7 +16,7 @@ import glob
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -24,6 +24,40 @@ import anthropic
 ET = ZoneInfo("America/New_York")
 MODEL = "claude-sonnet-4-6"
 JOURNAL_DIR = "journal"
+JOURNAL_INDEX = f"{JOURNAL_DIR}/index.json"
+
+
+def write_index():
+    """Commit a manifest of the journal so the dashboard never needs the API.
+
+    THE BUG THIS FIXES (2026-09-02): the Analyst Journal panel listed the
+    folder via api.github.com/contents/journal — the UNAUTHENTICATED GitHub
+    API, capped at 60 requests per hour per IP. Every page load burned one.
+    Once the cap was hit the fetch returned 403, the loader's `if(!r.ok)
+    return` swallowed it, and the panel rendered "No entries yet" as though
+    the folder were empty. Eight notes existed the whole time.
+
+    The brain map is built from those same notes, so it never rendered either.
+
+    raw.githubusercontent.com is CDN-backed and has no such cap, so the index
+    goes in the repo and the dashboard reads it from there.
+    """
+    try:
+        names = sorted(
+            os.path.basename(p) for p in glob.glob(f"{JOURNAL_DIR}/*.md")
+        )
+        os.makedirs(JOURNAL_DIR, exist_ok=True)
+        with open(JOURNAL_INDEX, "w") as f:
+            json.dump({
+                "generated": datetime.now(timezone.utc).isoformat(),
+                "count": len(names),
+                "files": names,
+            }, f, indent=2)
+        print(f"      journal index: {len(names)} note(s) -> {JOURNAL_INDEX}")
+        return names
+    except Exception as e:  # noqa: BLE001 — the index must never kill the review
+        print(f"      journal index write failed (ignored): {e}")
+        return []
 
 WIKILINK_RE = re.compile(r"\[\[([^\[\]|]+?)(?:\|[^\[\]]*)?\]\]")
 
@@ -196,6 +230,7 @@ def main():
                     f"No decisions logged; written by the review job itself, "
                     f"not by the reviewing model.*\n\n{body}")
         print(f"No decisions this week; wrote status entry to {fname}")
+        write_index()
         try:
             import health
             health.mark("weekly_review", "OK",
@@ -283,6 +318,8 @@ KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
         health.mark("weekly_review", "OK", f"review written for {start}..{end}")
     except Exception:  # noqa: BLE001
         pass
+    write_index()
+
     # First ~300 chars for the phone notification
     print("SUMMARY_START")
     print(review[:300].replace("\n", " "))
@@ -290,4 +327,12 @@ KNOWLEDGE GRAPH (Obsidian wikilinks) — weave these into the prose:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser(description="weekly self-review")
+    p.add_argument("--reindex", action="store_true",
+                   help="rebuild journal/index.json from the folder and exit")
+    a = p.parse_args()
+    if a.reindex:
+        write_index()
+    else:
+        main()

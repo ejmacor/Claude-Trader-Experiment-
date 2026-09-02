@@ -1106,16 +1106,51 @@ function renderBrain(notes){
 
 /* ---------- analyst journal (Obsidian -> /journal -> here) ---------- */
 const REPO = "ejmacor/Claude-Trader-Experiment-";
+const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/main/`;
+
+/* Filenames for the journal, newest first.
+
+   THE BUG THIS FIXES (2026-09-02): this listed the folder via
+   api.github.com/contents/journal — the UNAUTHENTICATED GitHub API, capped at
+   60 requests/hour per IP. Every page load spent one. Past the cap the fetch
+   returned 403, `if(!r.ok) return` swallowed it, and the panel showed "No
+   entries yet" as though the folder were empty. Eight notes were there the
+   whole time, and because renderBrain() is fed from these notes, the brain map
+   never drew either.
+
+   journal/index.json is committed by self_review.py and served from
+   raw.githubusercontent.com, which is CDN-backed and uncapped. The API is kept
+   only as a fallback — and its failure is now REPORTED, not swallowed. */
+async function journalFilenames(){
+  try{
+    const r = await fetch(RAW_BASE + "journal/index.json?t=" + Date.now(), {cache:"no-store"});
+    if(r.ok){
+      const idx = await r.json();
+      const files = (idx.files||[]).filter(n=>n.endsWith(".md")).sort().reverse();
+      if(files.length) return {files, via:"index"};
+    }
+  }catch(e){ /* fall through to the API */ }
+
+  const r = await fetch(`https://api.github.com/repos/${REPO}/contents/journal`, {cache:"no-store"});
+  if(!r.ok){
+    const why = r.status === 403
+      ? "GitHub API rate limit reached (60/hour per IP) and journal/index.json is missing"
+      : `GitHub API returned ${r.status}`;
+    throw new Error(why);
+  }
+  const files = (await r.json()).filter(f=>f.type==="file" && f.name.endsWith(".md"))
+    .map(f=>f.name).sort().reverse();
+  return {files, via:"api"};
+}
+
 async function loadJournal(){
   try{
-    const r = await fetch(`https://api.github.com/repos/${REPO}/contents/journal`, {cache:"no-store"});
-    if(!r.ok) return; // folder doesn't exist yet — empty state stands
-    const files = (await r.json()).filter(f=>f.type==="file" && f.name.endsWith(".md"))
-      .sort((a,b)=>a.name<b.name?1:-1); // YYYY-MM-DD names sort newest-first
-    if(!files.length) return;
-    const notes = await Promise.all(files.slice(0,20).map(async f=>{
-      const t = await (await fetch(f.download_url, {cache:"no-store"})).text();
-      return {name:f.name.replace(/\.md$/,""), md:t};
+    const {files} = await journalFilenames();
+    if(!files.length) return; // genuinely empty — the empty state is correct
+    const notes = await Promise.all(files.slice(0,20).map(async name=>{
+      const t = await (await fetch(RAW_BASE + "journal/" + name + "?t=" + Date.now(),
+                                   {cache:"no-store"})).text();
+      return {name:name.replace(/\.md$/,""), md:t};
     }));
     $("journal").innerHTML = notes.map((n,i)=>`
       <article class="jnote${i===0?" open":""}">
@@ -1131,7 +1166,18 @@ async function loadJournal(){
       be.style.display = "flex";
       console.error("Brain map:", err);
     }
-  }catch(e){ /* journal stays in empty state */ }
+  }catch(e){
+    /* An empty panel and a broken panel looked identical, which is how eight
+       existing notes read as "No entries yet" for who knows how long. Say
+       which one it is. */
+    console.error("Journal:", e);
+    const el = $("journal");
+    if(el) el.innerHTML =
+      `<div class="empty"><b>Journal couldn't load</b>${e.message}. ` +
+      `The notes are in the repo under /journal — this panel could not list them.</div>`;
+    const be = document.getElementById("brainEmpty");
+    if(be){ be.textContent = "Brain map needs the journal, which failed to load."; be.style.display = "flex"; }
+  }
 }
 
 $("refreshBtn").addEventListener("click", ()=>{ $("refreshBtn").textContent="…"; Promise.all([load(),loadJournal()]).then(()=>{$("refreshBtn").textContent="REFRESH";}); });

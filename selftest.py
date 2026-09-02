@@ -13,6 +13,7 @@ heat arithmetic, health staleness, halt detection — is covered here.
 """
 
 import csv
+import json
 import os
 import sys
 import tempfile
@@ -478,6 +479,43 @@ def main():
           _blocked("BULL_QUIET regime with SPY well above both SMAs — a "
                    "constructive tape, but no candidate cleared the screen."), False)
     check("an empty note is not blocked", _blocked(""), False)
+
+    print("\n[17] Journal index — no GitHub API on the read path")
+    # The Analyst Journal listed journal/ via api.github.com, capped at 60
+    # requests/hour per IP. Every page load spent one. Past the cap the fetch
+    # 403'd, the loader swallowed it, and the panel read "No entries yet" with
+    # eight notes sitting in the repo. The brain map is fed from those notes,
+    # so it never drew either. The manifest is committed instead.
+    import self_review as _sr
+    os.makedirs(_sr.JOURNAL_DIR, exist_ok=True)
+    for n in ("2026-07-03-launch.md", "2026-08-14-weekly-self-review.md",
+              "2026-07-24-weekly-self-review.md"):
+        with open(os.path.join(_sr.JOURNAL_DIR, n), "w") as f:
+            f.write("# note\n\n[[pattern-x]]\n")
+    with open(os.path.join(_sr.JOURNAL_DIR, "notes.txt"), "w") as f:
+        f.write("not markdown")
+
+    names = _sr.write_index()
+    check("index lists every markdown note", len(names), 3)
+    check("index ignores non-markdown files", "notes.txt" in names, False)
+
+    with open(_sr.JOURNAL_INDEX) as f:
+        idx = json.load(f)
+    check("index records the count", idx["count"], 3)
+    check("index is valid JSON with a files array", isinstance(idx["files"], list), True)
+    check("index is sorted so the dashboard can reverse it",
+          idx["files"], sorted(idx["files"]))
+    check("newest-first ordering puts the latest review on top",
+          sorted(idx["files"], reverse=True)[0], "2026-08-14-weekly-self-review.md")
+
+    # Must never take the review down with it.
+    _real_glob = _sr.glob.glob
+    _sr.glob.glob = lambda *a, **k: (_ for _ in ()).throw(OSError("disk gone"))
+    try:
+        check("a failed index write returns empty instead of raising",
+              _sr.write_index(), [])
+    finally:
+        _sr.glob.glob = _real_glob
 
     print()
     print("=" * 60)
