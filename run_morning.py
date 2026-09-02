@@ -24,8 +24,29 @@ import shadow_gate
 import trade_logger
 
 
+# Order statuses that represent an order which never reached the market.
+# A rejected or immediately-cancelled order is not evidence the day already ran.
+DEAD_ORDER_STATUSES = {
+    "canceled", "cancelled", "expired", "rejected", "suspended",
+    "pending_cancel", "pending_replace", "replaced", "stopped",
+}
+
+
 def already_ran_today():
-    """Duplicate-run guard: True if ANY order was already placed today (ET)."""
+    """Duplicate-run guard: True if an ENTRY order was already placed today (ET).
+
+    THE BUG THIS FIXES (2026-09-02): the original version counted *any* order
+    returned by /v2/orders — including the sells that EOD flatten, preflight
+    remediation and stop re-arms submit. So the moment any housekeeping
+    workflow touched the order endpoint on a given day, the scanner was locked
+    out for the rest of that day. `scan` was marked SKIPPED before regime,
+    before candidates, before the analyst ran, and no verdict was ever written.
+    The decision wire froze while every other panel kept updating.
+
+    An entry, for this system, is a BUY that actually reached the market and is
+    not a close/cover of a position we were already holding when the run began.
+    Exits are sells; housekeeping is sells; neither means "today already ran".
+    """
     et_midnight = datetime.combine(
         datetime.now(ZoneInfo("America/New_York")).date(), time.min,
         tzinfo=ZoneInfo("America/New_York"),
@@ -48,8 +69,30 @@ def already_ran_today():
         except (ValueError, TypeError, AttributeError):
             return ""
 
-    return any(_et_date(o.get("submitted_at")) == today or
-               _et_date(o.get("created_at")) == today for o in resp.json())
+    # Symbols we were already holding. A buy in one of these is an add or a
+    # short cover, not a fresh entry from today's scan.
+    try:
+        held = {p.get("symbol") for p in executor.get_open_positions()}
+    except Exception as e:  # noqa: BLE001
+        print(f"      Guard could not read positions ({e}) — not treating any buy as a cover.")
+        held = set()
+
+    entries = []
+    for o in resp.json():
+        if not (_et_date(o.get("submitted_at")) == today or
+                _et_date(o.get("created_at")) == today):
+            continue
+        if str(o.get("side", "")).lower() != "buy":
+            continue
+        if str(o.get("status", "")).lower() in DEAD_ORDER_STATUSES:
+            continue
+        if o.get("symbol") in held:
+            continue
+        entries.append(o.get("symbol"))
+
+    if entries:
+        print(f"      Entry orders already submitted today: {sorted(set(entries))}")
+    return bool(entries)
 
 
 def main():
@@ -60,9 +103,20 @@ def main():
     health.mark("morning", "OK", "run started")
 
     # 0a. Duplicate-run guard
-    if already_ran_today():
-        print("Orders already submitted today — duplicate run detected. Exiting.")
-        health.mark("scan", "SKIPPED", "duplicate run guard — orders already placed today")
+    #     Only ENTRY orders count. Exits, flattens and stop re-arms must never
+    #     lock the scanner out — that is what killed the wire from 2026-08-12.
+    try:
+        duplicate = already_ran_today()
+    except Exception as e:  # noqa: BLE001
+        # A guard that cannot check must not silently halt the pipeline. Fail
+        # open and say so — a duplicate entry is caught downstream by the
+        # position check; a false halt is invisible and costs a whole day.
+        print(f"      Duplicate-run guard errored ({e}) — failing OPEN and continuing.")
+        health.mark("scan", "WARN", f"duplicate-run guard unavailable: {e}")
+        duplicate = False
+    if duplicate:
+        print("Entry orders already submitted today — duplicate run detected. Exiting.")
+        health.mark("scan", "SKIPPED", "duplicate run guard — entry orders already placed today")
         sys.exit(0)
 
     # 0b. Regime first — it feeds both guardrails and the analyst

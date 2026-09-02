@@ -47,6 +47,18 @@ def _file_age_days():
         return 0
 
 
+def _ledger_age_trading_days():
+    """Ledger age in Mon-Fri days. A stage cannot be N days stale if the
+    ledger recording it is younger than N days."""
+    try:
+        first = read().get("first_seen")
+        if not first:
+            return 0
+        return trading_days_since(datetime.fromisoformat(first).astimezone(ET).date().isoformat())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def read():
     """Current health object. Never raises — a missing/corrupt file is empty."""
     try:
@@ -127,6 +139,13 @@ def stale(max_trading_days=2):
                             "no health record — is this workflow enabled?"))
             continue
         days = trading_days_since(entry.get("last_ok"))
+        # COLD START (fixed 2026-09-02): a stage with last_ok == None reports
+        # 999 days stale. On a ledger created yesterday that is nonsense — it
+        # made the dashboard shout "PIPELINE HALTED" at stages that were in
+        # fact running fine, just without a recorded success yet. A stage
+        # cannot be staler than the ledger that records it.
+        if not entry.get("last_ok"):
+            days = min(days, _ledger_age_trading_days())
         if days > limit:
             out.append((stage, days, entry.get("status", "?"), entry.get("detail", "")))
     return out

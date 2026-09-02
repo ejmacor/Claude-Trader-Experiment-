@@ -432,27 +432,63 @@ function renderHealth(text){
   try{ data = JSON.parse(text); }catch(e){ data = null; }
   if(!data || !data.stages || !Object.keys(data.stages).length) return;
 
+  /* COLD START (fixed 2026-09-02): tradingDaysSince(null) returns 999, so a
+     stage that has simply never recorded a success looked 999 days stale. On
+     a ledger created yesterday that turned an amber "no success yet" into a
+     red PIPELINE HALTED while every stage was in fact running on schedule.
+     A stage cannot be staler than the ledger that records it. */
+  const ledgerAge = data.first_seen
+    ? tradingDaysSince(etDate(data.first_seen))
+    : 999;
+
+  const today = etDate(new Date().toISOString());
   const problems = [];
   for(const [stage, entry] of Object.entries(data.stages)){
     const limit = stage === "weekly_review" ? 7 : 2;
-    const days = tradingDaysSince(entry.last_ok);
+    const neverOk = !entry.last_ok;
+    let days = tradingDaysSince(entry.last_ok);
+    if(neverOk) days = Math.min(days, ledgerAge);
     if(days > limit){
-      problems.push({stage, days, status: entry.status || "?", detail: entry.detail || ""});
+      problems.push({
+        stage, days, neverOk,
+        status: entry.status || "?",
+        detail: entry.detail || "",
+        /* Did the stage EXECUTE recently, even if it reported a problem?
+           A stage that ran an hour ago and errored is degraded, not halted. */
+        ranRecently: tradingDaysSince(entry.last_run_date_et) <= limit,
+        lastRunDate: entry.last_run_date_et || null
+      });
     }
   }
   if(!problems.length) return;
 
   problems.sort((a,b)=>b.days-a.days);
-  const halted = problems.some(p => p.status === "HALTED" || p.status === "ERROR");
+
+  /* HALTED means stages have stopped EXECUTING. If every problem stage still
+     ran on schedule and is merely reporting errors, that is DEGRADED — a very
+     different thing, and the old banner conflated them. */
+  const halted = problems.some(p => !p.ranRecently);
   el.className = halted ? "" : "warn";
-  const rows = problems.map(p =>
-    `<div><span class="hb-stage">${STAGE_LABEL[p.stage] || p.stage}</span>` +
-    ` — no successful run in ${p.days > 900 ? "any recorded" : p.days} trading day(s)` +
-    ` <span class="hb-detail">[${p.status}]${p.detail ? " " + p.detail : ""}</span></div>`
-  ).join("");
-  el.innerHTML = `<div class="hb-title">${halted ? "Pipeline halted" : "Pipeline stale"}</div>${rows}` +
-    `<div class="hb-detail" style="margin-top:6px">Equity and regime panels below may still be` +
-    ` updating — those are written before the halt and are not evidence the system is trading.</div>`;
+
+  const rows = problems.map(p => {
+    const when = p.neverOk
+      ? (p.ranRecently
+          ? `ran ${p.lastRunDate === today ? "today" : "on " + p.lastRunDate} but has not reported a success yet`
+          : `no successful run on record`)
+      : `no successful run in ${p.days > 900 ? "any recorded" : p.days} trading day(s)`;
+    return `<div><span class="hb-stage">${STAGE_LABEL[p.stage] || p.stage}</span>` +
+      ` — ${when}` +
+      ` <span class="hb-detail">[${p.status}]${p.detail ? " " + p.detail : ""}</span></div>`;
+  }).join("");
+
+  const footer = halted
+    ? `Equity and regime panels below may still be updating — those are written` +
+      ` before the halt and are not evidence the system is trading.`
+    : `These stages are still executing on schedule — they are reporting problems,` +
+      ` not silence. Check the detail above before assuming the pipeline is down.`;
+
+  el.innerHTML = `<div class="hb-title">${halted ? "Pipeline halted" : "Pipeline degraded"}</div>${rows}` +
+    `<div class="hb-detail" style="margin-top:6px">${footer}</div>`;
   el.style.display = "block";
 }
 
@@ -524,7 +560,13 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
     $("tapeNote").textContent = dec.market_note || "No note recorded for this session.";
     const chips = (row.candidates_sent||[]).map(c=>{
       const traded = tradedSet.has(c.symbol);
-      return `<span class="chip ${traded?"traded":"rejected"}"><span class="mark">${traded?"✓":"✗"}</span><span class="tk">${c.symbol}</span><span class="g">+${Number(c.gap_pct).toFixed(1)}%</span></span>`;
+      /* This number is the PREMARKET GAP from the scanner, not a return.
+         Unlabelled and hardcoded with a "+", it read as P&L — the tape showed
+         a green "✓ FRMI +18.1%" on a trade that closed −31%. Label it, and
+         let negative gaps print their own sign. */
+      const gap = Number(c.gap_pct);
+      const gapTxt = isFinite(gap) ? `gap ${gap >= 0 ? "+" : ""}${gap.toFixed(1)}%` : "gap n/a";
+      return `<span class="chip ${traded?"traded":"rejected"}" title="premarket gap at scan time — not trade P&L"><span class="mark">${traded?"✓":"✗"}</span><span class="tk">${c.symbol}</span><span class="g">${gapTxt}</span></span>`;
     }).join("");
     $("tapeChips").innerHTML = chips || `<span class="chip"><span class="g">No candidates passed the screen</span></span>`;
   } else {
