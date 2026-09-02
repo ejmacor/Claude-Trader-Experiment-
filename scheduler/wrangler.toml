@@ -1,0 +1,14 @@
+name = "claude-trader-scheduler"
+main = "worker.js"
+compatibility_date = "2026-09-02"
+
+[triggers]
+crons = [
+  "10 12 * * 1-5",   # morning-run      8:10am ET
+  "40 13 * * 1-5",   # position-sweep   9:40am ET
+  "40 16 * * 1-5",   # midday-manage   12:40pm ET
+  "50 19 * * 1-5",   # eod-flatten      3:50pm ET
+  "10 21 * * 1-5",   # evening-review   5:10pm ET
+  "30 22 * * 1-5",   # watchdog         6:30pm ET
+  "40 21 * * 5",     # weekly-review    5:40pm ET Friday
+]

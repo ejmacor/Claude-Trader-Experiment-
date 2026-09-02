@@ -16,7 +16,7 @@ import csv
 import os
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime
 
 os.environ.setdefault("ALPACA_API_KEY", "selftest")
 os.environ.setdefault("ALPACA_SECRET_KEY", "selftest")
@@ -366,6 +366,30 @@ def main():
     check("repair backfills conviction", row["conviction"], "8")
     check("repair backfills catalyst_type", row["catalyst_type"], "earnings")
     check("repair is idempotent", outcomes.repair_metadata(), [])
+
+    print("\n[13] Late-run entry guard")
+    # GitHub Actions cron has been landing 2-5 hours late on every workflow.
+    # The scanner screens PRE-MARKET gaps; acting on that read at lunchtime is
+    # a different, untested strategy wearing the same name. Past the cutoff the
+    # run still remediates and logs — it just places no new entries, loudly.
+    from zoneinfo import ZoneInfo as _Z
+
+    def _entries_allowed(hhmm, cutoff=None):
+        cutoff = cutoff or config.MAX_ENTRY_TIME_ET
+        h, m = (int(x) for x in hhmm.split(":"))
+        now = datetime(2026, 9, 3, h, m, tzinfo=_Z("America/New_York"))
+        ch, cm = (int(x) for x in cutoff.split(":"))
+        return now <= now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+
+    check("an on-time 8:10am run may trade", _entries_allowed("08:10"), True)
+    check("a slightly late 9:45am run may still trade", _entries_allowed("09:45"), True)
+    check("the cutoff minute itself is allowed",
+          _entries_allowed(config.MAX_ENTRY_TIME_ET), True)
+    check("one minute past the cutoff blocks entries", _entries_allowed("10:31"), False)
+    check("the observed 12:41pm late run blocks entries",
+          _entries_allowed("12:41"), False)
+    check("cutoff is before the pre-market screen goes stale mid-session",
+          config.MAX_ENTRY_TIME_ET < "12:00", True)
 
     print()
     print("=" * 60)

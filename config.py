@@ -63,6 +63,15 @@ ENTRY_TYPE = "market_on_open"
 # ---- Module A: DAY_MOMENTUM ----
 DAY_TIME_IN_FORCE = "day"          # flat by close
 
+# Latest ET clock time at which a morning run may still place NEW entries.
+# GitHub Actions crons are best-effort and have been landing 2-5 hours late
+# (morning slot 12:10 UTC, actual execution 16:41 UTC on 2026-09-02). The
+# scanner screens PRE-MARKET gaps; acting on that read at lunchtime is trading
+# four-hour-old information. Past this cutoff the run still does everything
+# else - benchmark, regime, preflight remediation, logging - but places no new
+# trades, and says so loudly rather than failing silently.
+MAX_ENTRY_TIME_ET = "10:30"
+
 # ---- Module B: SWING_CATALYST ----
 # CONFIG CHANGE 2026-07-10: SWING disabled — experiment is day-only, no
 # overnight positions. Analyst demotes any SWING_CATALYST proposal to

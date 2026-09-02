@@ -139,6 +139,34 @@ def main():
         health.mark("scan", "SKIPPED", "duplicate run guard — entry orders already placed today")
         sys.exit(0)
 
+    # 0b-2. LATE-RUN GUARD.
+    #
+    # A scheduled 8:10am ET run that GitHub actually executes at 12:41pm is
+    # not a morning run. Every filter upstream — gap %, relative volume,
+    # extension vs the 20d high — was computed on the pre-market tape, and the
+    # analyst's whole thesis is same-session continuation from the open. Acting
+    # on that four hours later is not the strategy; it is a different, untested
+    # one wearing the same name.
+    #
+    # This does NOT stop the run. Preflight still remediates, benchmark and
+    # regime still log, the account is still protected. It stops NEW ENTRIES,
+    # and it is loud about it — a silent no-trade day is indistinguishable from
+    # discipline, and that confusion is what hid the August outage.
+    late_reason = ""
+    try:
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        cutoff_h, cutoff_m = (int(x) for x in config.MAX_ENTRY_TIME_ET.split(":"))
+        cutoff = now_et.replace(hour=cutoff_h, minute=cutoff_m,
+                                second=0, microsecond=0)
+        if now_et > cutoff:
+            late_reason = (f"run started {now_et:%H:%M} ET, past the "
+                           f"{config.MAX_ENTRY_TIME_ET} entry cutoff — the "
+                           f"pre-market screen is stale; no new entries")
+            print(f"\n*** LATE RUN — {late_reason}")
+            print("    Continuing for preflight/benchmark/regime; entries disabled.")
+    except Exception as e:  # noqa: BLE001 — a clock problem must not halt the run
+        print(f"      Late-run guard error (ignored, entries allowed): {e}")
+
     # 0c. Regime first — it feeds both guardrails and the analyst
     print("\n[1/6] Classifying market regime...")
     regime = regime_mod.classify()
@@ -182,6 +210,19 @@ def main():
     print(f"      {len(candidates)} candidates with catalysts")
     # The scanner ran. Zero candidates is a legitimate result and reports OK;
     # only never reaching this line is a failure.
+    if late_reason:
+        health.mark("scan", "LATE", late_reason)
+        health.mark("execute", "LATE", late_reason)
+        print(f"      {len(candidates)} candidate(s) screened but NOT traded — {late_reason}")
+        # Signature is (candidates, decision). Writing a real decision row
+        # matters: the wire must show that the scanner RAN and found N names
+        # but was blocked, not sit blank as if nothing happened.
+        trade_logger.log_decision(candidates, {
+            "trades": [], "rejected": [],
+            "market_note": f"[ENGINE: no entries — {late_reason}]",
+        })
+        sys.exit(0)
+
     health.mark("scan", "OK", f"{len(candidates)} candidate(s) after filters")
     for c in candidates:
         t = c["technicals"]
