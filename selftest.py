@@ -15,6 +15,7 @@ heat arithmetic, health staleness, halt detection — is covered here.
 import os
 import sys
 import tempfile
+from datetime import date
 
 os.environ.setdefault("ALPACA_API_KEY", "selftest")
 os.environ.setdefault("ALPACA_SECRET_KEY", "selftest")
@@ -125,8 +126,16 @@ def main():
           actions.get("BUST"), "beyond_stop")
 
     print("\n[5] Health ledger and staleness")
-    check("trading_days_since counts weekdays only",
-          health.trading_days_since("2026-08-28"), 2)  # Fri -> Tue
+    # Pinned to a fixed calendar. This assertion used to compare against the
+    # real wall clock and started failing on 2026-09-02 purely because a day
+    # had passed — nothing was broken. Fri 2026-08-28 -> Tue 2026-09-01 is
+    # Mon + Tue = 2 weekdays, and it will still be 2 next year.
+    check("trading_days_since counts weekdays only (Fri -> Tue)",
+          health.trading_days_since("2026-08-28", today=date(2026, 9, 1)), 2)
+    check("trading_days_since skips the weekend (Fri -> Mon)",
+          health.trading_days_since("2026-08-28", today=date(2026, 8, 31)), 1)
+    check("trading_days_since is 0 for the same day",
+          health.trading_days_since("2026-08-28", today=date(2026, 8, 28)), 0)
     health.mark("scan", "OK", "3 candidates")
     check("successful stage records last_ok",
           health.read()["stages"]["scan"]["last_ok"] is not None, True)
@@ -167,6 +176,60 @@ def main():
               "heat" in self_review._halt_reason().lower(), True)
         health.mark("scan", "OK", "0 candidates")
         check("a genuinely quiet week reports no halt", self_review._halt_reason(), "")
+
+    print("\n[8] Engine coherence — the 2026-07-10 to 2026-09-02 blind spot")
+    # For seven weeks the prompt advertised a 1-5 day SWING_CATALYST hold while
+    # config.SWING_ENABLED was False. Every swing pick was silently rewritten to
+    # a day trade with a day-TIF bracket, so the stop expired at the close and
+    # the position rode naked. Nothing in any log said so. These checks fail
+    # loudly if the prompt and the executor ever disagree again.
+    try:
+        import analyst
+    except ModuleNotFoundError as e:
+        print(f"  SKIP  analyst import unavailable here ({e.name} not installed)")
+    else:
+      if not hasattr(analyst, "_module_block"):
+        # Fail, don't crash: a partially-updated tree must report a clear
+        # FAIL rather than a traceback, or the suite gets skipped entirely.
+        check("analyst builds its module block from config.SWING_ENABLED",
+              False, True)
+      else:
+        _real = config.SWING_ENABLED
+        try:
+            config.SWING_ENABLED = False
+            block = analyst._module_block()
+            check("day-only prompt never offers SWING_CATALYST",
+                  "SWING_CATALYST" in block, False)
+            check("day-only prompt states the position is flat by the close",
+                  "flat by the close" in block.lower(), True)
+
+            config.SWING_ENABLED = True
+            check("swing-enabled prompt does offer SWING_CATALYST",
+                  "SWING_CATALYST" in analyst._module_block(), True)
+        finally:
+            config.SWING_ENABLED = _real
+
+        # The prompt must agree with the TIF the executor will actually choose.
+        tif = config.SWING_TIME_IN_FORCE if config.SWING_ENABLED else config.DAY_TIME_IN_FORCE
+        check("prompt horizon matches the bracket time_in_force",
+              (tif == "gtc") == config.SWING_ENABLED, True)
+
+    # An open position is only a swing if it was PLACED as one.
+    with open("logs/trade_log.csv", "w", newline="") as f:
+        f.write("date,symbol,qty,ref_price,stop,target,order_id,skipped,module,time_in_force\n")
+        f.write("2026-08-11,SWNG,10,100.0,90.0,120.0,a,False,SWING_CATALYST,gtc\n")
+        f.write("2026-08-11,OVER,10,100.0,90.0,120.0,b,False,DAY_MOMENTUM,day\n")
+    import outcomes
+    if not hasattr(outcomes, "_logged_module"):
+        check("outcomes reads the module a trade was actually placed with",
+              False, True)
+        outcomes._logged_module = lambda s: "__missing__"
+    check("a real swing is labelled OPEN_SWING",
+          outcomes._logged_module("SWNG"), "SWING_CATALYST")
+    check("a day trade still open is NOT labelled a swing",
+          outcomes._logged_module("OVER") == "SWING_CATALYST", False)
+    check("an unknown symbol defaults to not-a-swing",
+          outcomes._logged_module("NOPE") == "SWING_CATALYST", False)
 
     print()
     print("=" * 60)

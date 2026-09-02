@@ -188,6 +188,22 @@ def detect_swing_closes(still_open, seen, out_dates=None):
     return closes
 
 
+def _logged_module(symbol):
+    """The module a symbol's most recent entry was actually executed under,
+    read from logs/trade_log.csv. Returns "" when unknown — callers must treat
+    unknown as NOT a swing, because the safe default is to flag an open
+    position rather than to assume someone meant to hold it."""
+    mod = ""
+    try:
+        with open("logs/trade_log.csv", newline="") as f:
+            for row in csv.DictReader(f):
+                if row.get("symbol") == symbol and row.get("module"):
+                    mod = row["module"]          # last match wins = most recent entry
+    except (OSError, csv.Error):
+        pass
+    return mod
+
+
 def already_recorded():
     """(date, symbol, action) triples already in outcomes.csv — makes reruns
     (backup crons, manual dispatches) append-safe instead of duplicating."""
@@ -266,8 +282,23 @@ def main():
                       f"(exit {close_dates.get(sym, today_et())})")
 
         for sym, t in taken.items():
-            action = "OPEN_SWING" if sym in still_open else "TAKEN"
-            if (today_et(), sym, action) in seen:
+            # An open position is only a SWING if it was actually placed as one.
+            # THE BUG THIS FIXES (2026-09-02): every still-open position was
+            # labelled OPEN_SWING regardless of module, so day-module trades
+            # that survived the close — because EOD flatten did not fire —
+            # were filed as intentional swings. outcomes.csv said OPEN_SWING
+            # while trade_log.csv said DAY_MOMENTUM/day for the same ticker.
+            # A day trade that is still open is an OVERSTAY: it is carrying
+            # overnight risk with an expired day-TIF bracket, and it should
+            # read as an alarm, not as a strategy.
+            if sym in still_open:
+                action = "OPEN_SWING" if _logged_module(sym) == "SWING_CATALYST" else "OPEN_OVERSTAY"
+            else:
+                action = "TAKEN"
+            # De-dupe across BOTH open labels: a position logged under one
+            # label must not be re-logged under the other on the same date.
+            if any(d == today_et() and s == sym and a in ("OPEN_SWING", "OPEN_OVERSTAY", action)
+                   for (d, s, a) in seen):
                 continue
             o, c = safe_open_close(sym)
             oc = round((c - o) / o * 100, 2) if o and c else ""

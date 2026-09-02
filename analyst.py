@@ -8,7 +8,11 @@ v2 upgrades:
   longer judges headlines blind
 - Two modules: DAY_MOMENTUM (flat by close) and SWING_CATALYST (1-5 day
   PEAD-style hold on hard catalysts) — Claude assigns each trade a module
-  and an intended holding period with a stated exit thesis
+  and an intended holding period with a stated exit thesis.
+  IMPORTANT: the prompt is built from config.SWING_ENABLED. When swing is
+  disabled the analyst is told so plainly and is never offered the module,
+  because a prompt that advertises a hold the engine will not honor corrupts
+  every reasoning string it produces. See _module_block().
 - Composite setup_score (catalyst quality x technical quality x regime fit);
   MIN_SETUP_SCORE gate enforced downstream
 """
@@ -44,14 +48,7 @@ MARKET REGIME: {regime} (risk multiplier {risk_mult}x)
 - BEAR: hostile tape for long catalyst plays; only exceptional hard catalysts.
 - CRISIS: you will not be called in crisis regime.
 
-TWO MODULES — assign each trade to exactly one:
-1. "DAY_MOMENTUM": gap continuation through today only. Flat by close.
-   Use for strong catalysts where the move is today's story.
-2. "SWING_CATALYST": 1-{swing_max_days} day hold to capture post-catalyst drift
-   (the PEAD effect: prices under-react to hard earnings/M&A/FDA news and
-   drift for days). ONLY for hard catalysts: {swing_catalysts}.
-   Strongest signal: revenue beat WITH raised guidance (not cost-cut EPS beats).
-   Position survives overnight — a gap against you is possible. Demand more.
+{module_block}
 
 TECHNICAL CONTEXT you receive per candidate and how to use it:
 - relative_volume: >=2 means the stock is unambiguously "in play" — continuation
@@ -75,8 +72,8 @@ Respond ONLY with JSON, no markdown fences:
   "trades": [
     {{
       "symbol": "TICKER",
-      "module": "DAY_MOMENTUM|SWING_CATALYST",
-      "intended_hold_days": 0,
+      "module": {module_enum},
+      "intended_hold_days": {hold_days_hint},
       "conviction": 1-10,
       "setup_score": 1-10,
       "catalyst_type": "earnings|fda|contract|ma|legal|other",
@@ -90,6 +87,49 @@ Respond ONLY with JSON, no markdown fences:
 }}"""
 
 
+MODULE_BLOCK_BOTH = """TWO MODULES — assign each trade to exactly one:
+1. "DAY_MOMENTUM": gap continuation through today only. Flat by close.
+   Use for strong catalysts where the move is today's story.
+2. "SWING_CATALYST": 1-{swing_max_days} day hold to capture post-catalyst drift
+   (the PEAD effect: prices under-react to hard earnings/M&A/FDA news and
+   drift for days). ONLY for hard catalysts: {swing_catalysts}.
+   Strongest signal: revenue beat WITH raised guidance (not cost-cut EPS beats).
+   Position survives overnight — a gap against you is possible. Demand more."""
+
+MODULE_BLOCK_DAY_ONLY = """ONE MODULE — every trade is "DAY_MOMENTUM":
+   Gap continuation through TODAY ONLY. The position is flat by the close and
+   the bracket is a day order that expires with it. There is no overnight hold
+   and no multi-day drift to capture.
+
+   This matters for selection, not just execution. Do NOT pick a name because
+   you expect post-earnings drift over the next several sessions — you will not
+   be there for it. The only question that pays is whether this name continues
+   IN TODAY'S SESSION. A depressed base with "room to recover over coming days"
+   is not a reason to buy here; same-day follow-through on real participation
+   is. Weight relative_volume and today's tape accordingly.
+
+   Multi-day swing holding is disabled in this configuration. Do not propose it."""
+
+
+def _module_block():
+    """The prompt must describe the engine that actually exists.
+
+    THE BUG THIS FIXES (2026-09-02): the prompt advertised SWING_CATALYST as a
+    1-5 day PEAD hold while config.SWING_ENABLED was False, so every swing the
+    analyst proposed was silently demoted to DAY_MOMENTUM with a day-TIF
+    bracket. The analyst kept selecting for multi-day drift; the executor kept
+    converting those picks to intraday trades. Every reasoning string in
+    trade_log.csv from 2026-07-10 onward argues a holding period the engine
+    never implemented.
+    """
+    if config.SWING_ENABLED:
+        return MODULE_BLOCK_BOTH.format(
+            swing_max_days=config.SWING_MAX_HOLD_DAYS,
+            swing_catalysts=", ".join(sorted(config.SWING_ALLOWED_CATALYSTS)),
+        )
+    return MODULE_BLOCK_DAY_ONLY
+
+
 def analyze(candidates, regime):
     if not candidates:
         return {"trades": [], "rejected": [], "market_note": "No candidates passed filters today."}
@@ -97,8 +137,11 @@ def analyze(candidates, regime):
     system = SYSTEM_PROMPT.format(
         regime=regime["regime"],
         risk_mult=regime["risk_mult"],
-        swing_max_days=config.SWING_MAX_HOLD_DAYS,
-        swing_catalysts=", ".join(sorted(config.SWING_ALLOWED_CATALYSTS)),
+        module_block=_module_block(),
+        module_enum=('"DAY_MOMENTUM|SWING_CATALYST"' if config.SWING_ENABLED
+                     else '"DAY_MOMENTUM"'),
+        hold_days_hint=("0-" + str(config.SWING_MAX_HOLD_DAYS) if config.SWING_ENABLED
+                        else "0"),
         max_trades=config.MAX_TRADES_PER_DAY,
         min_score=config.MIN_SETUP_SCORE,
     )
@@ -127,20 +170,50 @@ def analyze(candidates, regime):
 
     # Hard caps and quality gate, regardless of what the model says
     trades = decision.get("trades", [])[: config.MAX_TRADES_PER_DAY]
-    kept, gated = [], []
+    kept, gated, demotions = [], [], []
     swing_count = 0
     for t in trades:
         if _score(t.get("setup_score")) < config.MIN_SETUP_SCORE:
             gated.append({"symbol": t.get("symbol"), "reason": f"setup_score {t.get('setup_score')} below {config.MIN_SETUP_SCORE} gate"})
             continue
         if t.get("module") == "SWING_CATALYST":
-            if not config.SWING_ENABLED or t.get("catalyst_type") not in config.SWING_ALLOWED_CATALYSTS \
-               or swing_count >= config.SWING_MAX_POSITIONS:
-                t["module"] = "DAY_MOMENTUM"  # demote, don't discard
+            if not config.SWING_ENABLED:
+                why = "SWING_ENABLED is False — engine is day-only"
+            elif t.get("catalyst_type") not in config.SWING_ALLOWED_CATALYSTS:
+                why = f"catalyst_type {t.get('catalyst_type')!r} not in SWING_ALLOWED_CATALYSTS"
+            elif swing_count >= config.SWING_MAX_POSITIONS:
+                why = f"SWING_MAX_POSITIONS ({config.SWING_MAX_POSITIONS}) already used today"
+            else:
+                why = None
+
+            if why:
+                # Demote, don't discard — but SAY SO. A silent rewrite here is
+                # what let nine trades carry multi-day reasoning into day-TIF
+                # brackets without a single line of evidence in any log.
+                demotions.append({
+                    "symbol": t.get("symbol"),
+                    "from": "SWING_CATALYST",
+                    "to": "DAY_MOMENTUM",
+                    "intended_hold_days_requested": t.get("intended_hold_days"),
+                    "reason": why,
+                })
+                print(f"      DEMOTED {t.get('symbol')}: SWING_CATALYST -> DAY_MOMENTUM ({why})")
+                t["module"] = "DAY_MOMENTUM"
                 t["intended_hold_days"] = 0
+                t["demoted_from_swing"] = True
+                t["demotion_reason"] = why
             else:
                 swing_count += 1
         kept.append(t)
     decision["trades"] = kept
     decision.setdefault("rejected", []).extend(gated)
+    decision["demotions"] = demotions
+    if demotions:
+        # Surface it on the wire so the dashboard and the journal can see that
+        # the plan Claude wrote is not the plan that got executed.
+        note = decision.get("market_note", "")
+        syms = ", ".join(d["symbol"] for d in demotions if d.get("symbol"))
+        decision["market_note"] = (
+            f"{note} [ENGINE: {len(demotions)} swing pick(s) demoted to day trades — {syms}]"
+        ).strip()
     return decision

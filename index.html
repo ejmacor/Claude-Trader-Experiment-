@@ -80,6 +80,8 @@ header{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;
 .chip.traded .mark{color:var(--green)}
 .chip.rejected .mark{color:var(--red)}
 .chip .mark{font-weight:600}
+/* an open day-module position is a risk state, not a neutral one */
+td.warnres{color:var(--amber);font-weight:600}
 
 /* ---------- KPI ledger ---------- */
 .kpis{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:22px 0;background:var(--panel)}
@@ -772,6 +774,47 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
     /* swing trades close on a LATER date under SWING_CLOSED — join by symbol, on/after entry */
     const swingClosed = outcomes.filter(o=>o.action==="SWING_CLOSED");
     const swingOpen = new Set(outcomes.filter(o=>o.action==="OPEN_SWING").map(o=>o.symbol));
+    /* A day-module position that is still open is an OVERSTAY, not a swing —
+       it is carrying overnight risk on an expired day-TIF bracket. It must
+       read differently in the ledger from a hold that was actually intended. */
+    const overstayOpen = new Set(outcomes.filter(o=>o.action==="OPEN_OVERSTAY").map(o=>o.symbol));
+
+    /* Decide swing-vs-overstay from the MODULE THE TRADE WAS PLACED WITH,
+       which sits right here in trade_log.csv. Reading it off the outcomes
+       label instead would inherit every historical mislabel — NTRA is logged
+       OPEN_SWING from 2026-08-07 but was executed DAY_MOMENTUM/day, and the
+       ledger must show what actually happened, not what the old labeller
+       assumed. The outcomes label is only a fallback when module is absent. */
+    const isOverstay = t => {
+      const mod = (t.module || "").trim();
+      if(mod) return mod !== "SWING_CATALYST";
+      if(overstayOpen.has(t.symbol)) return true;
+      if(swingOpen.has(t.symbol)) return false;
+      return false;
+    };
+    const openLabel = t => {
+      const mod = (t.module || "").trim();
+      if(isOverstay(t)) return "open · OVERSTAY";
+      if(mod === "SWING_CATALYST" || swingOpen.has(t.symbol)) return "open · swing";
+      return "open / pending";
+    };
+
+    /* How the trade was ACTUALLY executed, next to the reasoning that argued
+       for it. The mismatch these two lines can now show — a multi-day PEAD
+       thesis sitting above module=DAY_MOMENTUM / tif=day — is the thing that
+       went unnoticed from 2026-07-10 to 2026-09-02. */
+    const execLine = t => {
+      const mod = t.module || "—";
+      const tif = (t.time_in_force || "").toLowerCase();
+      if(mod === "—" && !tif) return "";
+      const warn = tif === "day"
+        ? ` <span class="hb-detail">— stop and target expire at the close; unprotected overnight if the position is not flattened</span>`
+        : tif === "gtc"
+          ? ` <span class="hb-detail">— bracket persists overnight</span>`
+          : "";
+      return `<div class="risk"><span class="tag">Executed as</span>${mod}` +
+             `${tif ? ` · time_in_force=${tif}` : ""}${warn}</div>`;
+    };
     $("tradesBody").innerHTML = executed.slice().reverse().map((t,i)=>{
       let o = outBySym[t.date+"|"+t.symbol]
            || swingClosed.find(s=>s.symbol===t.symbol && s.date>=t.date);
@@ -785,11 +828,13 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
         <td>${t.conviction||"—"}/10</td>
         <td>${t.ref_price?("$"+Number(t.ref_price).toFixed(2)):"—"}</td>
         <td>${t.stop?("$"+Number(t.stop).toFixed(2)):"—"} / ${t.target?("$"+Number(t.target).toFixed(2)):"—"}</td>
-        <td class="${res==null?"":cls(res)}">${res==null?"open / pending":pct(res)}</td>
+        <td class="${res==null?(isOverstay(t)?"warnres":""):cls(res)}">${
+          res==null ? openLabel(t) : pct(res)}</td>
       </tr>
       <tr class="why" id="why-${i}"><td colspan="8">
         <span class="tag">Claude's reasoning</span>${t.reasoning||"—"}
         <div class="risk"><span class="tag">Key risk it named</span>${t.key_risk||"—"}</div>
+        ${execLine(t)}
       </td></tr>`;
     }).join("");
     $("tradesBody").addEventListener("click", e=>{

@@ -1,114 +1,156 @@
-# Claude Trader — fix package, 2026-09-02
+# Claude Trader — final package, 2026-09-02
 
-Three files, full replacements. Drop into repo root, overwrite, commit, push.
+Six files. Drop into `dev/`, overwrite, commit, push.
 
 ```
-run_morning.py
-health.py
-index.html
+analyst.py     outcomes.py    executor.py
+health.py      selftest.py    index.html
 ```
 
-Base versions were pulled from `main` today, so these are current-with-upstream
-as of 2026-09-02. If you've pushed anything since, diff before overwriting.
+**Supersedes fix package #2.** If you already unzipped that one, these files
+replace those — `health.py` and `selftest.py` are new additions found during this
+audit, and `index.html` changed again (the ledger label is now module-driven
+rather than reading a historical outcomes label). Nothing else in `dev/` is
+touched: `config.py`, `run_morning.py`, `preflight.py`, `protection_check.py`,
+`run_eod.py`, `scanner.py`, `regime.py` and the rest are all unchanged.
 
 ---
 
-## 1. `run_morning.py` — the actual outage
+## What the audit actually checked
 
-**`already_ran_today()` counted every order, not just entries.**
+- **`dev/` vs live `main`** — every `.py`, `.html`, `.yml`, `.txt` and `.md`
+  compared against `raw.githubusercontent.com`. All code identical. The five
+  journal files differ by CRLF line endings only (Windows checkout), which is
+  cosmetic. **Package #1 is already deployed to `main`** — `run_morning.py` and
+  `health.py` on the live repo carry `DEAD_ORDER_STATUSES` and
+  `_ledger_age_trading_days`.
+- **All 20 modules compile and import cleanly** with the patch applied.
+- **All 7 workflow YAML files parse.**
+- **`selftest.py` — 33 checks, all pass** on the patched tree.
+- **Dashboard rendered headlessly (jsdom) against your real log files.** Banner,
+  verdict tape, KPI strip, 9-row trade ledger, and 18 decision-wire entries all
+  render with no JS errors. The only console error is jsdom's missing canvas
+  package, which is a test-harness limitation, not a dashboard bug.
 
-```python
-# before
-return any(_et_date(o.get("submitted_at")) == today or
-           _et_date(o.get("created_at")) == today for o in resp.json())
+---
+
+## Two things this audit found that the earlier packages missed
+
+### 1. `selftest.py` was failing, and it wasn't your code
+
+```
+FAIL  trading_days_since counts weekdays only
+      expected 2, got 3
 ```
 
-`/v2/orders?status=all` returns sells, closes, stop re-arms, and canceled and
-rejected orders. So the moment EOD flatten, preflight remediation, or a stop leg
-touched the order endpoint on a given day, the guard tripped and `scan` was
-marked `SKIPPED` at step 0a — before regime, before candidates, before the
-analyst. No verdict row was ever written. That's why the decision wire has been
-frozen on Aug 11 while `logs/health.json` shows the morning run firing daily.
+The assertion pinned `trading_days_since("2026-08-28")` to `2` against the real
+wall clock. Fri Aug 28 to Tue Sep 1 is two weekdays, so it passed the day it was
+written and has failed every day since. Nothing was broken.
 
-Now an order only counts as an entry if all four hold:
+This is the more serious version of the problem you already had. A suite that
+cries wolf is a suite you stop reading, and "I ran selftest, it had a failure,
+that one's always been there" is exactly how seven weeks of naked positions go
+unnoticed.
 
-- `side == "buy"` (exits and housekeeping are sells)
-- status not in `canceled / cancelled / expired / rejected / suspended / pending_cancel / pending_replace / replaced / stopped`
-- symbol is **not** already in `executor.get_open_positions()` (that's an add or a cover, not a fresh entry)
-- submitted today ET (unchanged)
+`trading_days_since(date_str, today=None)` now takes an injectable date —
+default unchanged, no production caller passes it. The assertion is pinned to a
+fixed calendar and there are now three of them (Fri to Tue, Fri to Mon, same-day).
 
-**Also changed:** the guard now **fails open**. If the Alpaca call throws, it
-logs `WARN` to health and continues instead of exiting. A false halt is
-invisible and costs a whole trading day; a genuine duplicate is caught
-downstream by the position check.
+### 2. The ledger label was reading the wrong source
 
-Caveat: the buy-side filter assumes entries are always long. If you ever add a
-short module, this guard needs revisiting.
+Fix #2 had the dashboard decide swing-vs-overstay from the `OPEN_SWING` /
+`OPEN_OVERSTAY` action in `outcomes.csv`. That inherits every historical
+mislabel — NTRA is logged `OPEN_SWING` from 2026-08-07 but was executed
+`DAY_MOMENTUM` / `day`. Rendered against your real data it showed
+`open · swing`, which is the wrong answer.
 
----
-
-## 2. `health.py` — cold-start false alarm
-
-`trading_days_since(None)` returns `999`. Both `scan` and `eod` have
-`"last_ok": null`, and `first_seen` is `2026-09-01T22:06` — the ledger is one
-day old. So `stale()` reported two stages as 999 days stale on a ledger that
-had existed for a few hours.
-
-Added `_ledger_age_trading_days()`. When `last_ok` is null, staleness is now
-clamped to the ledger's own age. A stage cannot be staler than the file
-recording it.
+It now reads `module` straight off the `trade_log.csv` row that's already in
+hand, falling back to the outcomes label only when module is absent. Verified
+against real data: **NTRA now renders `open · OVERSTAY`.**
 
 ---
 
-## 3. `index.html` — two display bugs
+## New regression tests — section [8]
 
-**Banner.** Same 999 clamp applied client-side, plus a real distinction:
+Seven checks that would have caught the original bug:
 
-- **Pipeline halted** (red) — a problem stage has stopped *executing*
-- **Pipeline degraded** (amber) — stages are still running on schedule and merely reporting errors
-
-Today's state is the second one. `morning`, `scan` and `preflight` all ran, and
-`eod` ran last night; calling that HALTED was wrong. Rows now read
-"ran today but has not reported a success yet" instead of "no successful run in
-any recorded trading day(s)".
-
-Dry-run against the live `logs/health.json`: **the banner hides entirely** (ledger
-age 1 trading day, limit 2). Once the ledger is 3+ days old and `scan` still has
-no `last_ok`, it escalates correctly to amber with the duplicate-guard detail.
-
-**Verdict tape chip.** `gap_pct` was rendered unlabelled with a hardcoded `+`:
-
-```js
-<span class="g">+${Number(c.gap_pct).toFixed(1)}%</span>
+```
+[8] Engine coherence — the 2026-07-10 to 2026-09-02 blind spot
+  PASS  day-only prompt never offers SWING_CATALYST
+  PASS  day-only prompt states the position is flat by the close
+  PASS  swing-enabled prompt does offer SWING_CATALYST
+  PASS  prompt horizon matches the bracket time_in_force
+  PASS  a real swing is labelled OPEN_SWING
+  PASS  a day trade still open is NOT labelled a swing
+  PASS  an unknown symbol defaults to not-a-swing
 ```
 
-That's the premarket gap at scan time, not P&L — which is how you got a green
-`✓ FRMI +18.1%` sitting above a trade that closed −31.01%. Now renders
-`gap +18.1%` with a tooltip, and negative gaps print their own sign instead of
-`+-30.0%`.
+I ran these against the **unpatched** tree to confirm they aren't tautologies —
+three fail, and they fail gracefully with a clear message rather than a
+traceback, so a partially-updated tree reports FAIL instead of crashing.
+
+The fourth check is the one that matters long-term: it asserts the prompt's
+stated horizon agrees with the TIF `place_bracket` will actually choose. If those
+two ever drift apart again, the suite says so.
 
 ---
 
-## Verified before packaging
+## Carried over from fix #2 (unchanged in substance)
 
-- `run_morning.py`, `health.py` — `ast.parse` clean
-- `index.html` — script block extracted, `node --check` clean
-- `executor.get_open_positions()` confirmed to exist (`executor.py:61`)
-- new banner logic dry-run against live `logs/health.json`
+- **`analyst.py`** — module block built from `config.SWING_ENABLED` via
+  `_module_block()`. With swing off the analyst is told the trade is flat by the
+  close and that this governs *selection*, not just execution. JSON schema enum
+  and `intended_hold_days` hint follow the same flag. Demotions recorded on
+  `decision["demotions"]` with reason strings, flagged per-trade, and appended to
+  `market_note` as `[ENGINE: ...]`.
+- **`outcomes.py`** — `_logged_module()` reads the real module from
+  `trade_log.csv`. `OPEN_SWING` only for genuine swings; everything else still
+  open is `OPEN_OVERSTAY`. Unknown module defaults to overstay. De-dupe checks
+  both labels.
+- **`executor.py`** — the silent demotion in `place_bracket` now prints, and the
+  return carries `demoted_in_executor` and `protection_expires`.
+- **`index.html`** — gap chip labelled (`gap +18.1%`, negative signs handled),
+  banner splits halted from degraded with the cold-start clamp, ledger shows
+  `open · OVERSTAY` in amber, expanded rows carry an **Executed as** line with
+  module and TIF.
+
+`config.py` is still untouched. `SWING_ENABLED` stays `False`. Flipping it is a
+live strategy decision and everything here follows the flag either way.
 
 ---
 
-## NOT fixed — the thing I'd look at next
+## Deploy
 
-FRMI: entry $6.95, stop $6.39 (−8.06%), closed −31.01%. It went through the
-stop by 23 points and sat open Aug 11 → Sep 1. TWLO the same, Aug 7 → Sep 1.
-Preflight reported `0 stop(s) re-armed` today, which reads like it isn't finding
-brackets to re-arm at all rather than finding them all healthy.
+1. Unzip over `dev/`, overwrite all six.
+2. `python selftest.py` — expect **33 PASS, All checks passed.**
+3. Commit and push in GitHub Desktop.
+4. Hard-refresh the dashboard. Expect: no red banner, `gap +18.1%` on the FRMI
+   chip, NTRA reading `open · OVERSTAY`, and an **Executed as** line when you
+   expand any row.
 
-Nothing in this package touches that. The stop path lives in
-`executor.place_bracket` / `replace_stop` / `preflight`, and I'd be guessing
-without seeing whether the bracket legs were ever accepted by Alpaca. Worth
-pulling the order history for FRMI and checking whether a stop leg existed.
+Step 2 is the one worth not skipping. If it reports anything other than 33 PASS,
+stop and send me the output before pushing.
 
-Also unaddressed: the morning run fired at 12:41pm ET today. A scanner designed
-for 8:30am is screening a different tape four hours late.
+---
+
+## Still open — unchanged, still not a code problem
+
+`logs/eod.jsonl` timestamps are 23:11 and 23:35 UTC (7/15 to 7/16) and 22:06 UTC
+(9/1) — 7:11pm, 7:35pm, 6:06pm ET. The cron in `eod-flatten.yml` is 19:50/19:58
+UTC, correctly ten minutes before the close. EOD flatten lands two to three hours
+late whenever it runs.
+
+That's the operational half of the same failure: the day-TIF bracket dies at 4pm
+and the job meant to beat it arrives at 6. `preflight` and `position-sweep` cover
+the morning side and are working — the NTRA re-arm on 9/1 and the sweep on 9/2
+are both in the logs. Nothing in this zip makes GitHub Actions punctual.
+
+Two options when you want it closed: an external scheduler hitting
+`workflow_dispatch`, or make `run_eod.py` refuse to report OK when it runs after
+4pm ET so the watchdog catches the drift. Say which and I'll build it.
+
+One smaller thing I left alone: `DAY 59 / 90` is computed live from the start
+date while the data underneath it is whatever last got committed. On Aug 12 the
+counter kept climbing past a frozen wire. `asOf` already tells the truth
+("as of Aug 11, 9:39 AM ET"), so it's not wrong, just easy to miss — worth
+considering whether the day counter should freeze with the data.

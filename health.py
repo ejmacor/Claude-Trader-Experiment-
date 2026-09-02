@@ -98,16 +98,23 @@ def mark(stage, status, detail=""):
     return entry
 
 
-def trading_days_since(date_str):
+def trading_days_since(date_str, today=None):
     """Rough Mon-Fri day count since an ISO date. Holidays are not excluded —
-    this feeds an alert threshold, not an accounting record."""
+    this feeds an alert threshold, not an accounting record.
+
+    `today` is injectable so the behaviour can be asserted against a fixed
+    calendar. It defaults to the real ET date and no caller passes it in
+    production. selftest.py used to pin an expected value against the wall
+    clock, which meant the suite failed by calendar drift the day after it was
+    written — and a suite that cries wolf is a suite you stop reading.
+    """
     if not date_str:
         return 999
     try:
         start = datetime.fromisoformat(date_str).date()
     except (ValueError, TypeError):
         return 999
-    today = datetime.now(ET).date()
+    today = today or datetime.now(ET).date()
     days = 0
     cur = start
     while cur < today:

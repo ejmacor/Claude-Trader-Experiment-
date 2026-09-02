@@ -153,8 +153,21 @@ def size_position(equity, entry_price, stop_price, risk_mult=1.0):
 def place_bracket(symbol, ref_price, atr=None, module="DAY_MOMENTUM", regime_mult=1.0):
     # Hard no-overnight rule: while the swing module is disabled, no code
     # path may place a GTC bracket — regardless of what the caller asked for.
+    #
+    # This rewrite used to be silent. It is the last of three layers that
+    # turned a swing pick into a day trade without leaving a trace, and it is
+    # the one that chose the day TIF — which is why brackets on positions that
+    # outlived the close were CANCELLED BY ALPACA rather than broken. The
+    # position was not unstopped by a bug; the stop expired with the order.
+    # Say so, and hand the caller the fact so it reaches the trade log.
+    demoted_here = False
     if module == "SWING_CATALYST" and not config.SWING_ENABLED:
+        print(f"      [executor] {symbol}: SWING_CATALYST -> DAY_MOMENTUM "
+              f"(config.SWING_ENABLED is False). Bracket will be "
+              f"time_in_force={config.DAY_TIME_IN_FORCE!r} and its stop/target "
+              f"legs expire at today's close.")
         module = "DAY_MOMENTUM"
+        demoted_here = True
 
     account = get_account()
     equity = float(account["equity"])
@@ -207,6 +220,11 @@ def place_bracket(symbol, ref_price, atr=None, module="DAY_MOMENTUM", regime_mul
         "target": target_price,
         "module": module,
         "time_in_force": tif,
+        "demoted_in_executor": demoted_here,
+        # Loud, greppable, and true: a day-TIF bracket protects the position
+        # only until the close. Anything still open after that is naked until
+        # preflight/protection_check re-arms it the next morning.
+        "protection_expires": "at today's close" if tif == "day" else "gtc — persists",
     }
 
 
