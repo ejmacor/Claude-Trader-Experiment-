@@ -231,6 +231,48 @@ def main():
     check("an unknown symbol defaults to not-a-swing",
           outcomes._logged_module("NOPE") == "SWING_CATALYST", False)
 
+    print("\n[9] Benchmark gap detection and backfill")
+    # benchmark.csv froze at 2026-08-11 and stayed frozen for three weeks
+    # because log_spy() could only ever fetch ONE bar (today) and the write sat
+    # behind an early exit. A gap, once open, could not be closed by any code
+    # in the repo. These checks cover the repair path.
+    import benchmark as bm
+    bm.BENCHMARK_CSV = "logs/benchmark.csv"
+
+    with open("logs/benchmark.csv", "w", newline="") as f:
+        f.write("date,spy_close\n2026-08-11,773.035\n2026-07-06,700.0\n2026-08-10,772.76\n")
+
+    # A TRAILING hole is the shape that actually occurred. A first-to-last
+    # scan is blind to it, so this is the check that matters most.
+    g = bm.gaps(through="2026-08-14")
+    check("gap scan sees the trailing hole after the last row",
+          "2026-08-12" in g and "2026-08-13" in g, True)
+    check("gap scan excludes weekends",
+          any(d in g for d in ("2026-08-08", "2026-08-09")), False)
+
+    _real_fetch = bm.fetch_range
+    bm.fetch_range = lambda s_, e_: {"2026-08-10": 999.99,   # already present
+                                     "2026-08-12": 774.10,
+                                     "2026-08-13": 775.40}
+    try:
+        added = bm.backfill("2026-08-10", "2026-08-13", dry_run=True)
+        check("dry run reports what it would add", added, ["2026-08-12", "2026-08-13"])
+        check("dry run writes nothing", len(bm.read_rows()), 3)
+
+        bm.backfill("2026-08-10", "2026-08-13")
+        rows = bm.read_rows()
+        check("backfill adds the missing rows", len(rows), 5)
+        check("backfill never overwrites an existing row", rows["2026-08-10"], "772.76")
+
+        dates = [r.split(",")[0] for r in
+                 open("logs/benchmark.csv").read().strip().splitlines()[1:]]
+        check("file is written sorted by date", dates, sorted(dates))
+        check("no duplicate dates", len(dates), len(set(dates)))
+        check("re-running the backfill is a no-op",
+              bm.backfill("2026-08-10", "2026-08-13"), [])
+    finally:
+        bm.fetch_range = _real_fetch
+
     print()
     print("=" * 60)
     if FAILURES:

@@ -102,7 +102,27 @@ def main():
 
     health.mark("morning", "OK", "run started")
 
-    # 0a. Duplicate-run guard
+    # 0a. Benchmark FIRST — ahead of every exit path in this function.
+    #
+    # It was already moved ahead of the guardrail exit for this reason, but it
+    # still sat behind the duplicate-run exit above it, so benchmark.csv froze
+    # at 2026-08-11 anyway and stayed frozen for three weeks. SPY's close is
+    # market data. It does not depend on whether we may trade, whether we did
+    # trade, or whether this run is a duplicate, so nothing about our state
+    # should be able to stop it being recorded.
+    #
+    # Self-healing: if rows are missing (an outage, a skipped morning), close
+    # the gap rather than only logging today and leaving the hole forever.
+    try:
+        missing = benchmark.gaps()
+        if missing:
+            print(f"      Benchmark: {len(missing)} weekday row(s) missing — backfilling")
+            benchmark.backfill()
+        benchmark.log_spy()
+    except Exception as e:  # noqa: BLE001 — market data must never kill the run
+        print(f"      Benchmark log error (ignored): {e}")
+
+    # 0b. Duplicate-run guard
     #     Only ENTRY orders count. Exits, flattens and stop re-arms must never
     #     lock the scanner out — that is what killed the wire from 2026-08-12.
     try:
@@ -119,12 +139,12 @@ def main():
         health.mark("scan", "SKIPPED", "duplicate run guard — entry orders already placed today")
         sys.exit(0)
 
-    # 0b. Regime first — it feeds both guardrails and the analyst
+    # 0c. Regime first — it feeds both guardrails and the analyst
     print("\n[1/6] Classifying market regime...")
     regime = regime_mod.classify()
     print(f"      {regime['regime']} (risk x{regime['risk_mult']}) | {regime['detail']}")
 
-    # 0c. PREFLIGHT — remediation BEFORE judgement.
+    # 0d. PREFLIGHT — remediation BEFORE judgement.
     #
     # This ordering is deliberate and it is the fix for the 2026-08-12
     # deadlock. Guardrails used to run first and exit on failure, which meant
@@ -142,15 +162,6 @@ def main():
     except Exception as e:  # noqa: BLE001 — preflight must never kill the run
         print(f"      Preflight error (continuing to guardrails): {e}")
         health.mark("preflight", "ERROR", str(e))
-
-    # 0d. Benchmark BEFORE the guardrail exit. benchmark.csv froze on
-    # 2026-08-11 for the same reason the scanner did — it was logged after the
-    # analyst, so a halt took the SPY comparison line down with it. The
-    # benchmark is market data; it has nothing to do with whether we may trade.
-    try:
-        benchmark.log_spy()
-    except Exception as e:  # noqa: BLE001
-        print(f"      Benchmark log error (ignored): {e}")
 
     # 0e. Risk guardrails — evaluated AFTER remediation, on a truthful account
     account = executor.get_account()
