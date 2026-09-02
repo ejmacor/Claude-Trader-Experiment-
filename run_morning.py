@@ -153,8 +153,15 @@ def main():
     try:
         missing = benchmark.gaps()
         if missing:
-            print(f"      Benchmark: {len(missing)} weekday row(s) missing — backfilling")
-            benchmark.backfill()
+            # Backfill from the EARLIEST missing date, not from the last logged
+            # row. A no-arg backfill() starts at max(rows)+1, so it can only
+            # ever close a TRAILING hole — on 2026-09-02 it filled Aug 12 to
+            # Sep 2 and silently left ten interior gaps (Jul 14, Jul 27-31,
+            # Aug 3-6) untouched, because they sit before the last row it had.
+            # gaps() already knows where the earliest hole is; use it.
+            print(f"      Benchmark: {len(missing)} weekday row(s) missing "
+                  f"({missing[0]} .. {missing[-1]}) — backfilling")
+            benchmark.backfill(start=missing[0])
         benchmark.log_spy()
     except Exception as e:  # noqa: BLE001 — market data must never kill the run
         print(f"      Benchmark log error (ignored): {e}")

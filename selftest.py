@@ -430,6 +430,55 @@ def main():
         check("a bear tape is described as below its 200d SMA",
               "below its 200d SMA" in _rm.regime_note(_bear), True)
 
+    print("\n[15] Benchmark self-heal reaches interior gaps")
+    # The 2026-09-02 run detected 26 missing weekdays and filled 16. The other
+    # ten (Jul 14, Jul 27-31, Aug 3-6) sit BEFORE the last logged row, and a
+    # no-arg backfill() starts at max(rows)+1 — so it can only ever close a
+    # trailing hole. gaps() already knows the earliest one; pass it.
+    with open("logs/benchmark.csv", "w", newline="") as f:
+        f.write("date,spy_close\n")
+        for d, v in [("2026-07-06", 700.0), ("2026-07-13", 710.0),
+                     ("2026-07-16", 715.0), ("2026-09-01", 765.0)]:
+            f.write(f"{d},{v}\n")
+    _g = bm.gaps(through="2026-09-02")
+    check("interior gaps are detected", "2026-07-14" in _g, True)
+    check("trailing gaps are detected", "2026-09-02" in _g, True)
+    check("the earliest gap precedes the last logged row",
+          _g[0] < max(bm.read_rows()), True)
+
+    _asked = {}
+    _real = bm.fetch_range
+    bm.fetch_range = lambda s_, e_: (_asked.update(start=s_, end=e_) or {})
+    try:
+        bm.backfill()                       # the buggy call
+        check("a no-arg backfill starts after the last row — misses interiors",
+              _asked["start"] > _g[0], True)
+        bm.backfill(start=_g[0])            # the fixed call
+        check("passing the earliest gap covers the interior holes",
+              _asked["start"], _g[0])
+    finally:
+        bm.fetch_range = _real
+
+    print("\n[16] No-trade days are split by cause")
+    # Lumping "the scanner judged and declined" together with "the engine
+    # blocked entries" is how three weeks of outage read as discipline. The
+    # engine stamps its own blocks into market_note; the dashboard keys off it.
+    import re as _re
+    _blocked = lambda note: bool(_re.search(r"No trades today —|\[ENGINE:", note or ""))
+    check("a late-run block is counted as blocked",
+          _blocked("BULL_QUIET regime with SPY above both SMAs. No trades today "
+                   "— 2 candidate(s) screened but not traded: past the cutoff."), True)
+    check("the older bare engine note is still recognised",
+          _blocked("[ENGINE: no entries — run started 15:56 ET, past the 10:30 "
+                   "entry cutoff]"), True)
+    check("a guardrail halt is counted as blocked",
+          _blocked("BULL_QUIET regime. No trades today — no entries: risk "
+                   "guardrail: portfolio heat 3.5% at cap."), True)
+    check("a genuine judgment call is NOT counted as blocked",
+          _blocked("BULL_QUIET regime with SPY well above both SMAs — a "
+                   "constructive tape, but no candidate cleared the screen."), False)
+    check("an empty note is not blocked", _blocked(""), False)
+
     print()
     print("=" * 60)
     if FAILURES:

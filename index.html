@@ -268,7 +268,7 @@ footer .sep{color:var(--line-strong)}
       <div class="kpi"><div class="k">Total P&amp;L</div><div class="v" id="kPnl">—</div><div class="s" id="kPnlSub"></div></div>
       <div class="kpi"><div class="k">Win rate</div><div class="v" id="kWin">—</div><div class="s" id="kWinSub"></div></div>
       <div class="kpi"><div class="k">Trades taken</div><div class="v" id="kTrades">—</div><div class="s" id="kTradesSub"></div></div>
-      <div class="kpi"><div class="k">No-trade days</div><div class="v" id="kNoTrade">—</div><div class="s">discipline, not absence</div></div>
+      <div class="kpi"><div class="k">No-trade days</div><div class="v" id="kNoTrade">—</div><div class="s" id="kNoTradeSub">discipline, not absence</div></div>
       <div class="kpi"><div class="k">Rejections logged</div><div class="v" id="kRej">—</div><div class="s">counterfactuals tracked</div></div>
     </section>
 
@@ -633,10 +633,41 @@ function render(equity, trades, outcomes, decisions, shadow, chByDate, bench, re
 
   const executed = trades.filter(t=>!truthy(t.skipped));
   $("kTrades").textContent = executed.length;
-  $("kTradesSub").textContent = executed.length ? "ATR brackets · day + swing" : "capital fully preserved";
+  /* Was hardcoded "ATR brackets · day + swing". SWING_ENABLED has been False
+     since 2026-07-10 and every trade since has been DAY_MOMENTUM/day, so the
+     label described a module that does not run. Read it off the trade log. */
+  const nSwing = executed.filter(t=>(t.module||"").trim()==="SWING_CATALYST").length;
+  const nDay = executed.length - nSwing;
+  /* Counts, not a category list. "day + swing" was true of the ledger in the
+     weakest possible sense — one swing from 2026-07-08 and eight day trades —
+     and read as though both modules were in service. They are not; swing has
+     been disabled since 2026-07-10. */
+  const modTxt = "ATR brackets · " + [nDay && `${nDay} day`, nSwing && `${nSwing} swing`]
+    .filter(Boolean).join(", ");
+  $("kTradesSub").textContent = executed.length ? modTxt : "capital fully preserved";
 
-  const noTradeDays = decisions.filter(d=>!(d.row.decision?.trades||[]).length).length;
-  $("kNoTrade").textContent = noTradeDays;
+  /* A day with no trades is one of THREE things, and lumping them together is
+     how three weeks of outage passed for discipline:
+       1. the scanner ran, judged, and declined            -> discipline
+       2. the scanner ran but the engine blocked entries   -> blocked
+          (late run past the cutoff, or a risk guardrail halt)
+       3. the scanner never ran at all                     -> absence
+     Case 3 writes no decision row, so it cannot be counted here — that is what
+     the stale banner on the tape is for. Cases 1 and 2 both write rows and were
+     previously indistinguishable. The engine now stamps its own blocks into
+     market_note, so they can be separated. */
+  const noTradeRows = decisions.filter(d=>!(d.row.decision?.trades||[]).length);
+  const wasBlocked = d => {
+    const n = (d.row.decision?.market_note || "");
+    return /No trades today —|\[ENGINE:/.test(n);
+  };
+  const blocked = noTradeRows.filter(wasBlocked).length;
+  const discipline = noTradeRows.length - blocked;
+  $("kNoTrade").textContent = noTradeRows.length;
+  $("kNoTradeSub").textContent = blocked
+    ? `${discipline} by judgment · ${blocked} blocked by the engine`
+    : "discipline, not absence";
+  $("kNoTradeSub").className = blocked ? "s warnres" : "s";
 
   const rejCount = outcomes.filter(o=>o.action==="REJECTED").length
     || decisions.reduce((n,d)=>n+((d.row.decision?.rejected||[]).length),0);

@@ -1,90 +1,104 @@
-# Claude Trader — a blocked day still reports the market, 2026-09-02
+# Claude Trader — two fixes from the 2026-09-02 run, 2026-09-02
 
 ```
-run_morning.py    selftest.py
+run_morning.py    index.html    selftest.py
 ```
 
-Overwrite both in `dev/`, commit, push, **then** run the workflow.
-
-Supersedes the `run_morning.py` in the get-it-trading zip. `config.py` and
-`scheduler/` from that package are unchanged — deploy those as-is.
+Overwrite in `dev/`, commit, push. Both bugs were found by watching the real
+run rather than by testing — worth saying, because both passed their tests.
 
 ---
 
-## What changed
+## 1. `run_morning.py` — the benchmark self-heal only reached trailing gaps
 
-**`regime_note()`** builds the day's market note from live regime data. SPY's
-price, its 50/200 SMAs and 20-day realized vol are all current — none of them
-depend on the stale pre-market gap screen — so a day the system cannot trade
-can still say something true about the tape, then say why it stood down.
-
-Before:
+The run detected 26 missing weekdays and filled 16. The other ten are still
+missing:
 
 ```
-[ENGINE: no entries — run started 16:05 ET, past the 10:30 entry cutoff]
+2026-07-14, 2026-07-27..31, 2026-08-03..06
 ```
 
-After:
+My wiring called `benchmark.gaps()`, which correctly found all 26, then called
+`benchmark.backfill()` **with no arguments** — and a no-arg backfill starts at
+`max(rows) + 1`. It can only ever close a hole that comes *after* the last row
+it already has. Every one of those ten sits before it.
+
+Verified against your live `benchmark.csv`:
 
 ```
-BULL_QUIET regime with SPY above both SMAs (765.94 vs 754.29 / 710.23),
-realized vol 9.3%. No trades today — 2 candidate(s) screened but not
-traded: run started 16:05 ET, past the 10:30 entry cutoff.
+gaps detected        10   earliest 2026-07-14  latest 2026-08-06
+no-arg backfill()    starts 2026-09-02+1  -> misses all 10
+backfill(start=...)  starts 2026-07-14    -> covers all 10
 ```
 
-## The second bug I found while wiring it
+`gaps()` already knows where the earliest hole is. It now gets passed. The next
+morning run closes the remaining ten on its own.
 
-The **guardrail-halt path wrote nothing to `decisions.jsonl` at all.**
+## 2. `index.html` — no-trade days lumped three different things together
 
-It marked `health.json` correctly — the comment there even says a halt is a
-real outcome, not silence — but `health.json` is what the watchdog reads. The
-*dashboard* reads `decisions.jsonl`. So any day the risk guardrails halted the
-run, the verdict tape stayed frozen on the last good day and looked exactly
-like a dead pipeline.
+The counter went 11 -> 12 after the run, under a subtitle reading "discipline,
+not absence". The 12th was not discipline — the scanner ran, screened, and the
+engine blocked entries past the cutoff.
 
-That is the same failure that hid August, sitting in the code path specifically
-written to prevent it. It now logs a real row too, led by the same market read:
+A day with no trades is one of three things:
+
+1. the scanner ran, judged, and declined — **discipline**
+2. the scanner ran but the engine blocked it — **blocked** (late run, or a risk guardrail halt)
+3. the scanner never ran — **absence**
+
+Case 3 writes no decision row, so it can't be counted here; that's what the
+stale banner on the tape is for. Cases 1 and 2 both write rows and were
+indistinguishable. The engine now stamps its own blocks into `market_note`, so
+the dashboard keys off that:
 
 ```
-BULL_QUIET regime with SPY above both SMAs (...). No trades today — no
-entries: risk guardrail: <reason>.
+NO-TRADE DAYS   12
+                11 by judgment · 1 blocked by the engine
 ```
 
-## Degradation
+Rendered against your real `decisions.jsonl`. The subtitle only splits when
+there is something to split; a clean run still reads "discipline, not absence".
 
-`regime_note()` never raises. If `regime.classify()` fails or returns nothing,
-it writes `UNKNOWN regime. No trades today — ...` rather than killing the run.
-A `BEAR` tape is described as "below its 200d SMA" rather than borrowing the
-constructive phrasing — asserted in the suite so it can't drift.
+Conflating those two is precisely how three weeks of outage passed for
+discipline, so this one matters more than a label usually would.
+
+## 3. `index.html` — the trades subtitle, while I was in there
+
+`"ATR brackets · day + swing"` was hardcoded. It now reads counts off the trade
+log:
+
+```
+TRADES TAKEN   9
+               ATR brackets · 8 day, 1 swing
+```
+
+Which is the honest version: one swing from 2026-07-08, eight day trades, and
+swing disabled since 2026-07-10. The old label implied both modules were in
+service.
 
 ## selftest
 
-Section [14], ten checks covering both paths, the degraded case, and the bear
-wording. **Full suite: 81 PASS.**
+Sections [15] and [16], ten checks. [15] asserts the buggy no-arg call and the
+fixed one against a fixture with a real interior gap, so the difference is
+pinned rather than assumed. **Full suite: 91 PASS.**
 
 ## Verified
 
 - Tree compiles, all modules import clean
-- `regime_note()` exercised against your real `regime.jsonl` in on-time, late-with-candidates, late-with-none, and both degraded shapes
-- 81 PASS
+- `node --check` clean on the script block
+- Both fixes rendered in jsdom against your post-run `decisions.jsonl` and `benchmark.csv`
+- 91 PASS
 
 ---
 
-## Then run it
+## Tomorrow morning
 
-Actions -> Morning Trading Run -> Run workflow.
+If the Worker is deployed, the 8:10am run should give you:
 
-The workflow-level dedupe checks `decisions.jsonl` for a row dated today and
-there isn't one, so it will proceed. It commits its own logs back, so the
-dashboard updates on its own a minute or two later.
+- `health.json` -> `scan: OK` with a candidate count (not `LATE`)
+- benchmark's last ten holes closed — `python benchmark.py --check` reports 0
+- a real analyst market note on the tape, not an engine line
+- no-trade subtitle back to plain "discipline, not absence" if it trades or declines on judgment
 
-What you should see:
-
-- stale badge gone, tape dated today
-- headline: a real `BULL_QUIET ... realized vol 9.3%` read, then the no-trade reason
-- SPY line on the equity chart reaching today (26 weekdays backfilled)
-- `health.json` -> `scan: LATE` — which means **the duplicate guard is fixed**
-
-If `scan` comes back `SKIPPED`, read the detail string. `"entry orders already
-placed today"` is the new guard firing for a real reason; the old wording means
-the deploy didn't take.
+If `scan` still says `LATE`, the pipeline is healthy and the Worker isn't
+firing — check the Cloudflare trigger list before anything else.
