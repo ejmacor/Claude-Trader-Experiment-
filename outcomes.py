@@ -188,20 +188,35 @@ def detect_swing_closes(still_open, seen, out_dates=None):
     return closes
 
 
+def _logged_trade(symbol):
+    """The most recent trade_log.csv row for a symbol, or {}.
+
+    THE BUG THIS FIXES (2026-09-02): SWING_CLOSED rows were written with
+    conviction and catalyst_type blank, and those are the ONLY rows that carry
+    realized P&L. So the dashboard's judgment readout — the panel that answers
+    "does Claude's conviction predict outcomes", which is the whole point of
+    the experiment — bucketed all eight closed trades as `other x8` and
+    `Low (1-6) x8`. The real breakdown was earnings x5 / contract x2 / fda x1
+    and Med(7) x5 / High(8+) x2 / Low x1. Three weeks of the headline analysis
+    panel showing nothing.
+    """
+    row = {}
+    try:
+        with open("logs/trade_log.csv", newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("symbol") == symbol:
+                    row = r          # last match wins = most recent entry
+    except (OSError, csv.Error):
+        pass
+    return row
+
+
 def _logged_module(symbol):
     """The module a symbol's most recent entry was actually executed under,
     read from logs/trade_log.csv. Returns "" when unknown — callers must treat
     unknown as NOT a swing, because the safe default is to flag an open
     position rather than to assume someone meant to hold it."""
-    mod = ""
-    try:
-        with open("logs/trade_log.csv", newline="") as f:
-            for row in csv.DictReader(f):
-                if row.get("symbol") == symbol and row.get("module"):
-                    mod = row["module"]          # last match wins = most recent entry
-    except (OSError, csv.Error):
-        pass
-    return mod
+    return _logged_trade(symbol).get("module", "") or ""
 
 
 def already_recorded():
@@ -222,6 +237,51 @@ def safe_open_close(symbol):
     except Exception as e:  # noqa: BLE001
         print(f"open/close fetch failed for {symbol} (skipping pct): {e}")
         return None, None
+
+
+def repair_metadata(dry_run=False):
+    """Backfill conviction / catalyst_type on existing SWING_CLOSED rows.
+
+    The forward fix above only helps trades that close from now on. Every row
+    already in outcomes.csv was written blank, so the judgment readout stays
+    empty for the whole run unless history is repaired too.
+    """
+    if not os.path.exists(OUTCOMES_CSV):
+        print("outcomes: no file to repair")
+        return []
+    with open(OUTCOMES_CSV, newline="") as f:
+        rows = list(csv.DictReader(f))
+        fields = list(rows[0].keys()) if rows else []
+    fixed = []
+    for r in rows:
+        if r.get("action") != "SWING_CLOSED":
+            continue
+        if r.get("conviction") or r.get("catalyst_type"):
+            continue
+        meta = _logged_trade(r.get("symbol", ""))
+        if not meta:
+            continue
+        conv, cat = meta.get("conviction", ""), meta.get("catalyst_type", "")
+        if not conv and not cat:
+            continue
+        fixed.append((r.get("date"), r.get("symbol"), conv, cat))
+        if not dry_run:
+            r["conviction"], r["catalyst_type"] = conv, cat
+    if not fixed:
+        print("outcomes: nothing to repair")
+        return []
+    print(f"outcomes: {len(fixed)} SWING_CLOSED row(s) missing metadata")
+    for d, sym, conv, cat in fixed:
+        print(f"  {d}  {sym:6s} conviction={conv or '-':3s} catalyst={cat or '-'}")
+    if dry_run:
+        print("outcomes: --dry-run, nothing written")
+        return fixed
+    with open(OUTCOMES_CSV, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"outcomes: repaired {len(fixed)} row(s)")
+    return fixed
 
 
 def main():
@@ -272,10 +332,17 @@ def main():
             # because the old guard only checked today's date.
             already = any(s == sym and a == "SWING_CLOSED" for (_, s, a) in seen)
             if sym not in taken and sym not in still_open and not already:
+                # Carry the trade's own metadata onto the closing row. This
+                # is the only row with realized P&L, so leaving these blank
+                # made every downstream breakdown by catalyst or conviction
+                # meaningless.
+                meta = _logged_trade(sym)
                 w.writerow({
                     "date": close_dates.get(sym, today_et()),
                     "symbol": sym, "action": "SWING_CLOSED",
-                    "conviction": "", "catalyst_type": "", "reject_reason": "",
+                    "conviction": meta.get("conviction", ""),
+                    "catalyst_type": meta.get("catalyst_type", ""),
+                    "reject_reason": "",
                     "open_to_close_pct": "", "realized_pnl_pct": pnl,
                 })
                 print(f"SWING_CLOSED {sym:6s} realized {pnl}% "
@@ -336,4 +403,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser(description="outcomes recorder")
+    p.add_argument("--repair-metadata", action="store_true",
+                   help="backfill conviction/catalyst on existing SWING_CLOSED rows")
+    p.add_argument("--dry-run", action="store_true")
+    a = p.parse_args()
+    if a.repair_metadata:
+        repair_metadata(dry_run=a.dry_run)
+    else:
+        main()

@@ -12,6 +12,7 @@ submission. Everything upstream of that — staleness rules, stop resolution,
 heat arithmetic, health staleness, halt detection — is covered here.
 """
 
+import csv
 import os
 import sys
 import tempfile
@@ -286,6 +287,69 @@ def main():
           health.trading_days_since("2026-08-11", today=date(2026, 9, 2)) > 1, True)
     check("stale age is counted in trading days, not calendar days",
           health.trading_days_since("2026-08-11", today=date(2026, 9, 2)), 16)
+
+    print("\n[11] Equity curve integrity")
+    # Every stored row is an INTRADAY snapshot. On 2026-07-28 one landed
+    # 12.82% below the settled close (84,615.95 vs 97,056.69) with cash
+    # unchanged all week. That single row set MAX DRAWDOWN to -16.26%; the
+    # real figure is -6.94%. last_equity is the settled close and now wins
+    # unconditionally — no threshold, because a 0.25% one flagged eleven
+    # perfectly normal rows.
+    import trade_logger as tlg
+    rows = [{"date": "2026-09-01", "equity": "84615.95", "cash": "50000", "day_pnl_pct": "-12.805"}]
+    fixed, corr = tlg.settle_previous_close(list(rows), "2026-09-02", 97056.69)
+    check("yesterday's snapshot is replaced by the settled close",
+          float(fixed[-1]["equity"]), 97056.69)
+    check("the correction is reported", round(corr["drift_pct"], 2), 12.82)
+    check("day_pnl_pct derived from the bad snapshot is cleared",
+          fixed[-1]["day_pnl_pct"], "")
+
+    # A small, ordinary intraday-vs-close difference is still corrected —
+    # the close is authoritative — but it is not treated as an anomaly.
+    small = [{"date": "2026-09-01", "equity": "96900.00", "cash": "5", "day_pnl_pct": "0.1"}]
+    fx, c2 = tlg.settle_previous_close(list(small), "2026-09-02", 97056.69)
+    check("ordinary drift is corrected too", float(fx[-1]["equity"]), 97056.69)
+    check("ordinary drift is below the notable threshold",
+          c2["drift_pct"] < tlg.EQUITY_DRIFT_NOTABLE_PCT, True)
+
+    # A GAP must never let an old row be overwritten with a much later close.
+    gapped = [{"date": "2026-08-11", "equity": "100245.45", "cash": "5", "day_pnl_pct": "0.1"}]
+    fg, c3 = tlg.settle_previous_close(list(gapped), "2026-09-02", 97056.69)
+    check("a non-adjacent row is left alone", float(fg[-1]["equity"]), 100245.45)
+    check("no correction is claimed for a gapped row", c3, None)
+
+    check("max drawdown is driven by the bad row",
+          tlg.max_drawdown([{"date": "2026-07-27", "equity": "100000"},
+                            {"date": "2026-07-28", "equity": "84615.95"},
+                            {"date": "2026-07-29", "equity": "97000"}])[0], -15.38)
+
+    print("\n[12] Closed trades carry their own metadata")
+    # SWING_CLOSED rows are the ONLY rows with realized P&L, and they were
+    # written with conviction and catalyst_type blank. The judgment readout —
+    # the panel that answers whether conviction predicts outcomes — showed
+    # `other x8` and `Low (1-6) x8` for three weeks.
+    with open("logs/trade_log.csv", "w", newline="") as f:
+        f.write("date,symbol,conviction,catalyst_type,qty,ref_price,stop,target,"
+                "order_id,skipped,module,time_in_force\n")
+        f.write("2026-08-11,ZZZ,8,earnings,10,100.0,90.0,120.0,a,False,DAY_MOMENTUM,day\n")
+    check("trade metadata is recoverable by symbol",
+          (outcomes._logged_trade("ZZZ").get("conviction"),
+           outcomes._logged_trade("ZZZ").get("catalyst_type")), ("8", "earnings"))
+    check("an unknown symbol yields no metadata", outcomes._logged_trade("QQQ"), {})
+
+    with open("logs/outcomes.csv", "w", newline="") as f:
+        f.write("date,symbol,action,conviction,catalyst_type,reject_reason,"
+                "open_to_close_pct,realized_pnl_pct\n")
+        f.write("2026-08-20,ZZZ,SWING_CLOSED,,,,,-4.5\n")
+    outcomes.repair_metadata(dry_run=True)
+    with open("logs/outcomes.csv") as f:
+        check("dry run leaves the file untouched", ",,,," in f.read(), True)
+    outcomes.repair_metadata()
+    with open("logs/outcomes.csv", newline="") as f:
+        row = list(csv.DictReader(f))[0]
+    check("repair backfills conviction", row["conviction"], "8")
+    check("repair backfills catalyst_type", row["catalyst_type"], "earnings")
+    check("repair is idempotent", outcomes.repair_metadata(), [])
 
     print()
     print("=" * 60)
