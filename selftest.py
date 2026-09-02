@@ -287,6 +287,22 @@ def main():
           health.trading_days_since("2026-08-11", today=date(2026, 9, 2)) > 1, True)
     check("stale age is counted in trading days, not calendar days",
           health.trading_days_since("2026-08-11", today=date(2026, 9, 2)), 16)
+    # v1 of the staleness fix marked the same fact in three places — a badge, a
+    # dimmed headline and an extra chip — while STILL giving the three-week-old
+    # ticker top billing. Labelling something misleading three times does not
+    # make it not misleading. The tape now leads with the absence of a verdict
+    # and the old pick is collapsed behind a click. These assert the contract
+    # the markup depends on, so a future edit cannot quietly promote it back.
+    # The suite runs in a tempdir, so resolve the dashboard next to this file.
+    _tape_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    _tape = open(_tape_path).read() if os.path.exists(_tape_path) else ""
+    check("index.html is readable for the markup checks", bool(_tape), True)
+    check("stale tape leads with the absence of a verdict",
+          'NO VERDICT SINCE' in _tape, True)
+    check("the old verdict is collapsed, not headlined",
+          'details class="last-verdict"' in _tape, True)
+    check("the three-signal styling is gone", "stale-badge" in _tape, False)
+    check("the duplicate not-today chip is gone", "stale-note" in _tape, False)
 
     print("\n[11] Equity curve integrity")
     # Every stored row is an INTRADAY snapshot. On 2026-07-28 one landed
