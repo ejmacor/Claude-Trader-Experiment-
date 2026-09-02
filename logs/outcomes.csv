@@ -2,7 +2,7 @@ date,symbol,action,conviction,catalyst_type,reject_reason,open_to_close_pct,real
 2026-07-02,CLRO,REJECTED,,,Already gapped 100%+ the prior day on an M&A deal involving share issuance and a dilutive S-1 filing for $10-15M raise — the catalyst is fully priced (and then some) and the upcoming dilution is a structural headwind against continuation; micro-cap at $8.6M market cap with halts screams pump risk.,82.73,
 2026-07-02,MIDDV,REJECTED,,,"This is a 'when issued' ex-distribution ticker (MIDDV) with no standalone news catalyst — the price movement reflects a corporate distribution/spinoff mechanics, not a tradeable gap continuation setup.",,
 2026-07-02,SLBT,REJECTED,,,"No identifiable catalyst in the news — the summary doesn't even mention SLBT, making this a gap with no verifiable fundamental driver; likely a sympathy or low-float move.",36.59,
-2026-07-15,PENG,SWING_CLOSED,,,,,-0.92
+2026-07-15,PENG,SWING_CLOSED,7,earnings,,,-0.92
 2026-07-15,AEHR,OPEN_SWING,7,earnings,,-10.48,
 2026-07-20,IREN,OPEN_SWING,7,contract,,10.77,
 2026-07-20,ACHR,REJECTED,,,"Catalyst is a product unveiling/partnership announcement (Thunder VTOL with Anduril) — no contract value disclosed, no revenue specifics, vague defense optionality; relative volume of 1.67 is below conviction threshold and this reads as hype-driven momentum, not a hard catalyst for swing.",13.98,
@@ -14,10 +14,10 @@ date,symbol,action,conviction,catalyst_type,reject_reason,open_to_close_pct,real
 2026-08-07,TEAM,REJECTED,,,GATE VETO: +36.6% gap — chasing extension past 30%,2.24,
 2026-08-11,FRMI,OPEN_SWING,6,contract,,0.64,
 2026-08-11,FRMI,REJECTED,,,Flagged for dual-module consideration but accepted as SWING_CATALYST above; secondary rejection note: the 0.32 relative volume is a serious red flag and position sizing should be minimal until market-hours volume confirms genuine institutional interest.,0.64,
-2026-07-17,AEHR,SWING_CLOSED,,,,,-9.88
-2026-08-06,IREN,SWING_CLOSED,,,,,-7.18
-2026-08-06,SMCI,SWING_CLOSED,,,,,-6.67
-2026-08-06,ARWR,SWING_CLOSED,,,,,-4.98
-2026-08-06,THC,SWING_CLOSED,,,,,13.75
-2026-09-01,TWLO,SWING_CLOSED,,,,,-4.47
-2026-09-01,FRMI,SWING_CLOSED,,,,,-31.01
+2026-07-17,AEHR,SWING_CLOSED,7,earnings,,,-9.88
+2026-08-06,IREN,SWING_CLOSED,7,contract,,,-7.18
+2026-08-06,SMCI,SWING_CLOSED,8,earnings,,,-6.67
+2026-08-06,ARWR,SWING_CLOSED,7,fda,,,-4.98
+2026-08-06,THC,SWING_CLOSED,7,earnings,,,13.75
+2026-09-01,TWLO,SWING_CLOSED,8,earnings,,,-4.47
+2026-09-01,FRMI,SWING_CLOSED,6,contract,,,-31.01
