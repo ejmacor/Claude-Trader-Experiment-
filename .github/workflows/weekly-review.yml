@@ -38,7 +38,7 @@ jobs:
         run: |
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
-          git add journal/ || true
+          git add journal/ logs/health.json || true
           if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
           git commit -m "journal: weekly self-review $(TZ=America/New_York date +%F)"
           for i in 1 2 3; do
