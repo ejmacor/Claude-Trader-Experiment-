@@ -1,3 +1,56 @@
+# Claude Trader - v2.2 tuning patch, 2026-09-11
+
+Approved by the user after the trade-restriction review of the first 9 closed
+trades (2W/7L, equity -6.1%) and 22 sessions of funnel data.
+
+## What changed and why
+
+1. **MIN_AVG_DOLLAR_VOLUME: $5M -> $2M** (config.py)
+   The $5M floor caused 325 of ~380 filter rejections and left 13 of 22
+   sessions with zero candidates - the main reason the system barely trades.
+   Miscalibrated to a ~$100k paper account risking 1% with a 15% notional
+   cap: $2M/day is still >130x the largest possible position.
+
+2. **MIN_RELATIVE_VOLUME is now actually enforced** (scanner.py)
+   Config defined 1.5 since v2.0 but scanner.py never checked it - the same
+   class of bug as v1's unused liquidity floor. Entries were taken on dead
+   tape (TWLO rel vol 0.06 at entry, a loss). Enforcement is pace-adjusted
+   via expected_volume_fraction(): the floor is 1.5x the fraction of a
+   normal day's volume that should be done by the time the run executes, so
+   a pre-open run doesn't compare an almost-empty daily bar against a
+   full-day average. Measured against true live volume summed from 1-minute
+   bars (daily-bar premarket coverage is feed/condition dependent), with
+   the daily-bar proxy as fallback.
+
+3. **Contract catalysts disabled** (config.py, analyst.py, shadow_gate.py)
+   FRMI -31.0% (conviction 6) and IREN -7.2%; contract trades averaged
+   about -19% vs -1.6% for earnings. Contract PRs headline dollar figures
+   with no verifiable economics - the catalyst type this engine judges
+   worst. config.BLOCKED_CATALYST_TYPES = {"contract"}, enforced three
+   ways: the analyst prompt excludes them, analyze() hard-filters them,
+   and the gate vetoes them as a backstop. Revisit with a bigger sample.
+
+4. **No-overnight guarantee: scheduler redundancy + flat check**
+   (morning-run.yml, eod-flatten.yml, evening-review.yml)
+   Investigation: run_eod.py, the position sweep, and preflight are sound -
+   the overnight holds (IREN 17 days, FRMI's -31% gap) happened because the
+   scheduled jobs themselves did not fire (GitHub cron landing 2-5h late or
+   skipping slots; the Cloudflare dispatcher worker silent). Repo-side:
+   - morning-run: third cron slot (12:40 UTC), all still before the 10:30
+     ET entry cutoff (cutoff unchanged - stale-screen trades stay banned)
+   - eod-flatten: post-close 20:10 UTC backstop so a skipped in-session
+     slot still queues the closes for the next open
+   - evening-review: verifies the account is actually flat after the close
+     and pages high-priority if not (a SKIPPED slot alerts nobody)
+   Not repo-side: the Cloudflare worker's GitHub token is in the user's
+   Cloudflare dashboard - that fix restores the precise clock.
+
+5. **Kept, deliberately**: the 10:30 ET entry cutoff, all risk limits
+   (1% risk, 3% daily halt, 6% weekly breaker, 3% heat cap, MIN_SETUP_SCORE
+   6). Losses came from signal quality and dead tape, not from risk sizing.
+
+---
+
 # Claude Trader — journal panel off the GitHub API, 2026-09-02
 
 ```
