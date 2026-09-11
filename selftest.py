@@ -517,6 +517,73 @@ def main():
     finally:
         _sr.glob.glob = _real_glob
 
+    print("\n[18] Relative-volume floor is pace-adjusted (2026-09-11)")
+    # Enforcing the raw full-day MIN_RELATIVE_VOLUME pre-open would compare a
+    # nearly-empty daily bar against a full-day average and reject everything
+    # - the mirror image of never enforcing it at all. The floor must scale
+    # with the fraction of the session that has actually elapsed.
+    import scanner as _sc
+
+    def _frac(hhmm):
+        h, m = (int(x) for x in hhmm.split(":"))
+        return _sc.expected_volume_fraction(datetime(2026, 9, 11, h, m,
+                                                     tzinfo=_Z("America/New_York")))
+
+    check("pre-open expects only a sliver of the day", _frac("08:10") < 0.05, True)
+    check("curve rises through the morning", _frac("10:00") > _frac("09:30"), True)
+    check("mid-session expects roughly half", 0.4 <= _frac("12:30") <= 0.65, True)
+    check("at the close the whole day is expected", _frac("16:00"), 1.0)
+    check("after the close stays at the full day", _frac("18:30"), 1.0)
+    check("curve never decreases",
+          all(_frac(t1) <= _frac(t2) for t1, t2 in
+              [("08:10", "09:45"), ("09:45", "10:30"), ("10:30", "12:25"),
+               ("12:25", "15:00"), ("15:00", "16:00")]), True)
+
+    # The two real losses that motivated this: FRMI (rel vol 0.32) and TWLO
+    # (0.06), observed on a 12:25pm ET late run. Both must fail the floor at
+    # that time of day.
+    floor_1225 = _sc.rel_vol_floor(datetime(2026, 9, 11, 12, 25,
+                                            tzinfo=_Z("America/New_York")))
+    check("FRMI 0.32 fails the 12:25pm floor", 0.32 < floor_1225, True)
+    check("TWLO 0.06 fails the 12:25pm floor", 0.06 < floor_1225, True)
+    check("a 1.5x-pace name passes the 12:25pm floor", 1.5 * _frac("12:25") >= floor_1225, True)
+    check("floor never exceeds the raw config minimum",
+          _sc.rel_vol_floor(datetime(2026, 9, 11, 9, 45,
+                                     tzinfo=_Z("America/New_York"))) < config.MIN_RELATIVE_VOLUME,
+          True)
+
+    print("\n[19] Blocked catalyst types are hard-filtered (2026-09-11)")
+    # Contract catalysts (FRMI -31%, IREN -7.2%; cohort avg ~-19% vs -1.6%
+    # for earnings) are disabled in config.BLOCKED_CATALYST_TYPES. The analyst
+    # prompt excludes them, analyze() hard-filters them, and the gate vetoes
+    # them as a backstop.
+    check("contract is disabled in config",
+          "contract" in config.BLOCKED_CATALYST_TYPES, True)
+
+    import analyst as _an
+    # The prompt must carry the exclusion so the model does not waste picks.
+    # (analyze() needs API access, so verify the prompt template + the
+    # filter's building blocks directly.)
+    check("system prompt has a blocked-catalyst slot",
+          "{blocked_catalysts_rule}" in _an.SYSTEM_PROMPT, True)
+
+    import shadow_gate as _sg
+    _cand = [{"symbol": "FRMI", "gap_pct": 12.0, "last_price": 6.95, "news": []}]
+    _dec = {"trades": [{"symbol": "FRMI", "conviction": 8, "catalyst_type": "contract"}],
+            "rejected": []}
+    _row = _sg.evaluate(_cand, _dec)
+    check("gate vetoes a blocked catalyst type",
+          _row["evaluated"][0]["verdict"], "WOULD_VETO")
+    check("gate names the blocking rule",
+          _row["evaluated"][0]["flags"][0]["rule"], "BLOCKED_CATALYST")
+    _dec2 = {"trades": [{"symbol": "NTRA", "conviction": 8, "catalyst_type": "earnings"}],
+             "rejected": []}
+    _cand2 = [{"symbol": "NTRA", "gap_pct": 12.0, "last_price": 180.0,
+               "news": [{"source": "a"}, {"source": "b"}]}]
+    _row2 = _sg.evaluate(_cand2, _dec2)
+    check("earnings catalysts are not caught by the block",
+          _row2["evaluated"][0]["flags"], [])
+
     print()
     print("=" * 60)
     if FAILURES:
