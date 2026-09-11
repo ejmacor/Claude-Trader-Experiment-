@@ -57,7 +57,7 @@ TECHNICAL CONTEXT you receive per candidate and how to use it:
 - extension_vs_20d_high_pct: how stretched the name already was BEFORE today.
   Positive double digits = chasing.
 
-Rules:
+{blocked_catalysts_rule}Rules:
 - At most {max_trades} trades. Zero is a perfectly good answer.
 - Long only.
 - Favor hard catalysts with verifiable specifics. Reject vague PR, lone analyst
@@ -134,10 +134,22 @@ def analyze(candidates, regime):
     if not candidates:
         return {"trades": [], "rejected": [], "market_note": "No candidates passed filters today."}
 
+    blocked = sorted(getattr(config, "BLOCKED_CATALYST_TYPES", set()))
+    blocked_rule = ""
+    if blocked:
+        blocked_rule = (
+            "EXCLUDED CATALYST TYPES: "
+            + ", ".join(blocked)
+            + ". Do NOT propose any trade whose catalyst is one of these types, "
+              "no matter how large the headline — they are disabled in this "
+              "configuration (hard-filtered downstream).\n\n"
+        )
+
     system = SYSTEM_PROMPT.format(
         regime=regime["regime"],
         risk_mult=regime["risk_mult"],
         module_block=_module_block(),
+        blocked_catalysts_rule=blocked_rule,
         module_enum=('"DAY_MOMENTUM|SWING_CATALYST"' if config.SWING_ENABLED
                      else '"DAY_MOMENTUM"'),
         hold_days_hint=("0-" + str(config.SWING_MAX_HOLD_DAYS) if config.SWING_ENABLED
@@ -172,7 +184,18 @@ def analyze(candidates, regime):
     trades = decision.get("trades", [])[: config.MAX_TRADES_PER_DAY]
     kept, gated, demotions = [], [], []
     swing_count = 0
+    blocked_types = getattr(config, "BLOCKED_CATALYST_TYPES", set())
     for t in trades:
+        if t.get("catalyst_type") in blocked_types:
+            # 2026-09-11: contract catalysts averaged about -19% across the
+            # sample (FRMI -31%, IREN -7.2%) vs -1.6% for earnings. Disabled
+            # in config; this is the hard enforcement, not a suggestion.
+            gated.append({"symbol": t.get("symbol"),
+                          "reason": f"catalyst_type {t.get('catalyst_type')!r} disabled "
+                                    f"(config.BLOCKED_CATALYST_TYPES)"})
+            print(f"      BLOCKED {t.get('symbol')}: catalyst_type "
+                  f"{t.get('catalyst_type')!r} is disabled in config")
+            continue
         if _score(t.get("setup_score")) < config.MIN_SETUP_SCORE:
             gated.append({"symbol": t.get("symbol"), "reason": f"setup_score {t.get('setup_score')} below {config.MIN_SETUP_SCORE} gate"})
             continue
