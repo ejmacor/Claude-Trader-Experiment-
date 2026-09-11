@@ -96,6 +96,14 @@ def evaluate(candidates, decision, open_position_count=0):
 
         flags = []
 
+        # R0 — config-disabled catalyst type (2026-09-11)
+        # Mirrors the hard filter in analyst.analyze(); if a blocked type ever
+        # reaches the gate, veto it here too. Defence in depth — the analyst
+        # filter is the primary, this is the backstop.
+        if ct in getattr(config, "BLOCKED_CATALYST_TYPES", set()):
+            flags.append({"rule": "BLOCKED_CATALYST", "level": "veto",
+                          "detail": f"'{ct}' catalysts are disabled in config (BLOCKED_CATALYST_TYPES)"})
+
         # R1 — extended gap
         if gap >= EXTENDED_GAP_PCT:
             flags.append({"rule": "EXTENDED_GAP", "level": "veto",
