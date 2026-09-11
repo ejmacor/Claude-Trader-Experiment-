@@ -17,7 +17,9 @@ Both are regime-gated and sized by volatility.
 # ---- Experiment ----
 EXPERIMENT_START = "2026-07-06"    # v2 day 1 — fresh 90-day clock
 EXPERIMENT_DAYS = 90
-CONFIG_VERSION = "2.1"          # 2026-07-10: swing disabled (day-only), EOD flatten added
+CONFIG_VERSION = "2.2"          # 2026-09-11: $2M ADV floor, pace-adjusted rel-vol enforcement,
+                              # contract catalysts disabled, scheduler redundancy (see PATCH_NOTES)
+# v2.1: 2026-07-10: swing disabled (day-only), EOD flatten added
 
 # ---- Account / Risk (paper) ----
 STARTING_EQUITY = 100_000
@@ -46,9 +48,21 @@ VOL_CRISIS_MIN = 40.0
 MIN_GAP_PCT = 4.0
 MIN_PRICE = 5.00
 MAX_PRICE = 500.00
-MIN_AVG_DOLLAR_VOLUME = 5_000_000  # 20-day avg $ volume — NOW ENFORCED (v1 bug: defined, never checked)
-MIN_RELATIVE_VOLUME = 1.5          # today's volume pace vs 20d avg ("stocks in play" filter,
-                                   # the strongest documented ORB/momentum edge enhancer)
+# 2026-09-11: lowered $5M -> $2M. The $5M floor caused 325 of ~380 filter
+# rejections over 22 sessions and left 13 of 22 days with ZERO candidates -
+# the single biggest reason the system barely trades. It was also
+# miscalibrated to this account: max position is 15% of ~$100k (~$15k
+# notional), and $2M/day is still >130x that. Names the floor kept out
+# included perfectly tradeable mid-caps (Signet, Sweetgreen, Oatly).
+MIN_AVG_DOLLAR_VOLUME = 2_000_000  # 20-day avg $ volume — ENFORCED (v1 bug: defined, never checked)
+MIN_RELATIVE_VOLUME = 1.5          # today's volume PACE vs 20d avg ("stocks in play" filter,
+                                   # the strongest documented ORB/momentum edge enhancer).
+                                   # NOW ENFORCED in scanner.py (2026-09-11) against the
+                                   # pace-adjusted floor: 1.5x the fraction of a typical
+                                   # day's volume that should be done by now. Enforcing the
+                                   # raw full-day number pre-open would reject everything
+                                   # (the day's bar is still mostly empty) - same class of
+                                   # bug as never enforcing it at all.
 MAX_EXTENSION_FROM_20D_HIGH = 25.0 # skip names already >25% above their 20d high pre-gap
 MAX_CANDIDATES_SENT_TO_CLAUDE = 12
 
@@ -95,6 +109,17 @@ MIDDAY_TIGHTEN_TRIGGER_R = 1.5     # position at/above +1.5R -> raise stop to br
 # ---- Quality gate (was shadow-only in v1; now blocking) ----
 GATE_BLOCKING = True               # shadow_gate vetos now actually veto
 MIN_SETUP_SCORE = 6                # Claude's composite score must clear this
+
+# ---- Disabled catalyst types (2026-09-11) ----
+# Contract-announcement catalysts were the worst cohort in the first 9 trades:
+# FRMI -31.0% (conviction 6, rel vol 0.32) and IREN -7.2%; contract trades
+# averaged about -19% vs -1.6% for earnings on the same engine. Contract PRs
+# announce headline dollar figures with no verifiable economics, which is
+# exactly the kind of catalyst this engine cannot judge. Disabled until the
+# sample is large enough to re-test properly. Enforced in three places:
+# the analyst prompt (told not to pick them), analyst.analyze() (hard filter),
+# and shadow_gate.py (veto backstop).
+BLOCKED_CATALYST_TYPES = {"contract"}
 
 # ---- Claude API ----
 CLAUDE_MODEL = "claude-sonnet-4-6"
