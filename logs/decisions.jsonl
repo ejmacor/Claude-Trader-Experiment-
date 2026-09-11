@@ -25,3 +25,4 @@
 {"timestamp": "2026-09-08T12:11:09.965714+00:00", "candidates_sent": [], "decision": {"trades": [], "rejected": [], "market_note": "No candidates passed filters today."}}
 {"timestamp": "2026-09-09T12:10:36.245208+00:00", "candidates_sent": [], "decision": {"trades": [], "rejected": [], "market_note": "No candidates passed filters today."}}
 {"timestamp": "2026-09-10T12:10:52.381866+00:00", "candidates_sent": [], "decision": {"trades": [], "rejected": [], "market_note": "No candidates passed filters today."}}
+{"timestamp": "2026-09-11T19:03:21.612472+00:00", "candidates_sent": [], "decision": {"trades": [], "rejected": [], "market_note": "BULL_QUIET regime with SPY above both SMAs (765.08 vs 758.60 / 714.21), realized vol 8.9%. No trades today \u2014 no entries: run started 15:03 ET, past the 10:30 entry cutoff \u2014 the pre-market screen is stale; no new entries."}}
