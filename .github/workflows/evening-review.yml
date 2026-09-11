@@ -40,6 +40,51 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python review.py | tee review_summary.txt
 
+      # 2026-09-11: the no-overnight guarantee failed silently before
+      # (positions held past the close for days when the flatten job's slot
+      # was skipped). The flatten has its own failure alert, but a SKIPPED
+      # slot alerts nobody — so the evening review now asks the account
+      # directly whether anything is still open and pages if it is.
+      - name: Verify account is flat
+        if: always()
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, urllib.request
+          import requests
+          headers = {
+              "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+              "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
+          }
+          try:
+              r = requests.get("https://paper-api.alpaca.markets/v2/positions",
+                               headers=headers, timeout=30)
+              r.raise_for_status()
+              positions = r.json()
+          except Exception as e:
+              print(f"Flat check could not read positions (ignored): {e}")
+              raise SystemExit(0)
+          if not positions:
+              print("Flat check: no open positions. OK.")
+              raise SystemExit(0)
+          syms = ", ".join(f"{p['symbol']} x{p['qty']}" for p in positions)
+          print(f"FLAT CHECK: {len(positions)} position(s) still open: {syms}")
+          topic = os.environ.get("NTFY_TOPIC", "").strip()
+          if topic:
+              req = urllib.request.Request(
+                  f"https://ntfy.sh/{topic}",
+                  data=(f"{len(positions)} position(s) still open after the close: {syms}. "
+                        "EOD flatten did not clear them. The 9:40am position sweep is the "
+                        "next backstop - check Actions.").encode(),
+                  headers={"Title": "Claude Trader: NOT FLAT after close",
+                           "Tags": "rotating_light", "Priority": "high"})
+              urllib.request.urlopen(req, timeout=30)
+              print("Alert sent.")
+          EOF
+
       - name: Commit outcomes back to repo
         run: |
           git config user.name "claude-trader-bot"
