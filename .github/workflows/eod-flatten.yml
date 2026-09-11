@@ -3,12 +3,18 @@ name: EOD Flatten
 on:
   schedule:
     # GitHub cron is UTC. 19:50 UTC = 3:50pm ET during EDT — ten minutes
-    # before the close. 19:58 backup in case the first slot is skipped
-    # (run_eod.py is idempotent: with nothing open it does nothing).
-    # NOTE: When clocks change to EST in November, shift both +1 hour
-    # ('50 20 * * 1-5' and '58 20 * * 1-5').
+    # before the close. 19:58 backup in case the first slot is skipped.
+    # 20:10 UTC (4:10pm ET) post-close backstop added 2026-09-11: if both
+    # in-session slots are skipped by GitHub (observed: crons landing 2-5h
+    # late or not at all while the Cloudflare dispatcher was down), the
+    # flatten still fires right after the bell and the close orders execute
+    # at the next open instead of the position riding unprotected all night.
+    # run_eod.py is idempotent: with nothing open it does nothing.
+    # NOTE: When clocks change to EST in November, shift all three +1 hour
+    # ('50 20 * * 1-5', '58 20 * * 1-5' and '10 21 * * 1-5').
     - cron: '50 19 * * 1-5'
     - cron: '58 19 * * 1-5'
+    - cron: '10 20 * * 1-5'
   workflow_dispatch: {}
 
 permissions:
