@@ -47,7 +47,7 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: |
-          python - <<'EOF'
+          python - <<'EOF2'
           import os, requests
           from datetime import datetime
           from zoneinfo import ZoneInfo
@@ -64,9 +64,10 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"market_open={'true' if is_open else 'false'}\n")
           print("Market open today (ET):", is_open)
-          EOF
+          EOF2
 
       - name: Flatten all positions
+        id: flatten
         if: steps.holiday.outputs.market_open != 'false'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
@@ -75,6 +76,7 @@ jobs:
 
       - name: Commit logs
         if: always()
+        continue-on-error: true
         run: |
           git config user.name "claude-trader-bot"
           git config user.email "actions@github.com"
@@ -92,7 +94,7 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          python - <<'EOF'
+          python - <<'EOF2'
           import os, urllib.request
           from datetime import datetime
           from zoneinfo import ZoneInfo
@@ -108,10 +110,12 @@ jobs:
               f"https://ntfy.sh/{topic}", data=f"[{et}] {msg}".encode(),
               headers={"Title": f"Claude Trader: EOD flatten ({et})", "Tags": "checkered_flag"})
           urllib.request.urlopen(req, timeout=30)
-          EOF
+          EOF2
 
+      # Page only when the market-facing flatten did not complete. Log pushes and
+      # phone notification are housekeeping and must not create a trading emergency.
       - name: Alert on failure
-        if: failure()
+        if: always() && steps.holiday.outputs.market_open != 'false' && steps.flatten.outcome != 'success'
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
