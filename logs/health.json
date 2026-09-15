@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-15T19:50:51.259577+00:00",
+  "updated": "2026-09-15T21:10:52.270633+00:00",
   "stages": {
     "eod": {
       "status": "OK",
@@ -11,9 +11,9 @@
     "evening": {
       "status": "OK",
       "detail": "0 taken / 0 rejected / 0 exit(s) reconstructed",
-      "last_run": "2026-09-15T01:23:55.125973+00:00",
-      "last_run_date_et": "2026-09-14",
-      "last_ok": "2026-09-14"
+      "last_run": "2026-09-15T21:10:52.270616+00:00",
+      "last_run_date_et": "2026-09-15",
+      "last_ok": "2026-09-15"
     },
     "morning": {
       "status": "OK",
