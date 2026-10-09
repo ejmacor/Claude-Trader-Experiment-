@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-09T02:55:15.858937+00:00",
+  "updated": "2026-10-09T18:19:44.208458+00:00",
   "stages": {
     "eod": {
       "status": "OK",
@@ -18,23 +18,23 @@
     "morning": {
       "status": "OK",
       "detail": "run started",
-      "last_run": "2026-10-08T12:10:56.885623+00:00",
-      "last_run_date_et": "2026-10-08",
-      "last_ok": "2026-10-08"
+      "last_run": "2026-10-09T18:19:39.801468+00:00",
+      "last_run_date_et": "2026-10-09",
+      "last_ok": "2026-10-09"
     },
     "scan": {
-      "status": "OK",
-      "detail": "0 candidate(s) after filters",
-      "last_run": "2026-10-08T12:11:00.103183+00:00",
-      "last_run_date_et": "2026-10-08",
+      "status": "LATE",
+      "detail": "run started 14:19 ET, past the 10:30 entry cutoff \u2014 the pre-market screen is stale; no new entries",
+      "last_run": "2026-10-09T18:19:44.208145+00:00",
+      "last_run_date_et": "2026-10-09",
       "last_ok": "2026-10-08"
     },
     "preflight": {
       "status": "OK",
       "detail": "0 stop(s) re-armed, 0 stale position(s) closed",
-      "last_run": "2026-10-08T19:24:09.048994+00:00",
-      "last_run_date_et": "2026-10-08",
-      "last_ok": "2026-10-08"
+      "last_run": "2026-10-09T18:19:41.022888+00:00",
+      "last_run_date_et": "2026-10-09",
+      "last_ok": "2026-10-09"
     },
     "midday": {
       "status": "OK",
@@ -44,10 +44,10 @@
       "last_ok": "2026-10-08"
     },
     "execute": {
-      "status": "OK",
-      "detail": "0 trade(s) processed from 0 candidate(s)",
-      "last_run": "2026-10-08T12:11:00.272947+00:00",
-      "last_run_date_et": "2026-10-08",
+      "status": "LATE",
+      "detail": "run started 14:19 ET, past the 10:30 entry cutoff \u2014 the pre-market screen is stale; no new entries",
+      "last_run": "2026-10-09T18:19:44.208454+00:00",
+      "last_run_date_et": "2026-10-09",
       "last_ok": "2026-10-08"
     },
     "weekly_review": {
