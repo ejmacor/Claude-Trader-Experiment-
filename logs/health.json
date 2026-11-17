@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-17T12:11:13.077030+00:00",
+  "updated": "2026-11-17T16:41:06.729476+00:00",
   "stages": {
     "eod": {
       "status": "OK",
@@ -39,9 +39,9 @@
     "midday": {
       "status": "OK",
       "detail": "no open positions",
-      "last_run": "2026-11-17T00:26:56.094092+00:00",
-      "last_run_date_et": "2026-11-16",
-      "last_ok": "2026-11-16"
+      "last_run": "2026-11-17T16:41:06.729461+00:00",
+      "last_run_date_et": "2026-11-17",
+      "last_ok": "2026-11-17"
     },
     "execute": {
       "status": "OK",
