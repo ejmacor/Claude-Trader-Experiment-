@@ -113,3 +113,4 @@
 {"timestamp": "2026-11-12T12:10:31.715100+00:00", "regime": "CHOP", "risk_mult": 0.5, "detail": {"spy": 759.8, "sma50": 764.98, "sma200": 731.28, "realized_vol_20d_pct": 22.4}}
 {"timestamp": "2026-11-13T19:36:45.008308+00:00", "regime": "CHOP", "risk_mult": 0.5, "detail": {"spy": 753.0, "sma50": 764.42, "sma200": 731.88, "realized_vol_20d_pct": 22.1}}
 {"timestamp": "2026-11-16T12:10:53.099949+00:00", "regime": "CHOP", "risk_mult": 0.5, "detail": {"spy": 754.27, "sma50": 764.44, "sma200": 731.89, "realized_vol_20d_pct": 22.1}}
+{"timestamp": "2026-11-17T12:11:12.323471+00:00", "regime": "CHOP", "risk_mult": 0.5, "detail": {"spy": 740.04, "sma50": 763.84, "sma200": 732.13, "realized_vol_20d_pct": 23.0}}
